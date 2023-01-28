@@ -6,7 +6,7 @@ import Time
 import Url
 
 
-type UserChoice
+type UserChoices
     = Scissors
     | Rock
     | Paper
@@ -20,32 +20,29 @@ type UserState
     | TimerDone
 
 
-type alias Player =
-    ( String, UserChoice )
+type alias Player = (String, UserChoices)
 
 
 type alias FrontendModel =
     { key : Browser.Navigation.Key
-    , userChoice : UserChoice
+    , userChoices : UserChoices
     , userName : String
     , userState : UserState
     , startingCounterNumber : Int
-    , players : List Player
+    , players : (List Player)
     }
 
 
 type alias BackendModel =
-    { players : List Player
+    { players : (List Player)
     }
 
 
 type FrontendMsg
     = UrlClicked Browser.UrlRequest
     | UrlChanged Url.Url
-    | StoreScissors
+    | ChooseSign UserChoices
     | StartGame
-    | StoreRock
-    | StorePaper
     | Tick Time.Posix
     | StoreName String
     | SendUserName String
