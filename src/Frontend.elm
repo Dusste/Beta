@@ -5,17 +5,15 @@ module Frontend exposing (..)
 
 import Browser exposing (UrlRequest(..))
 import Browser.Navigation as Nav
-import Css exposing (spaceAround, verticalAlign)
 import Element exposing (..)
 import Element.Background as Background
 import Element.Border as Border
+import Element.Events
 import Element.Font as Font exposing (center)
 import Element.Input as Input
-import Html exposing (form)
-import Html.Attributes exposing (checked, type_, value)
-import Html.Events exposing (onClick, onInput, onSubmit)
 import Lamdera exposing (sendToBackend)
 import Process
+import Random
 import Task
 import Time
 import Types exposing (..)
@@ -53,8 +51,10 @@ init url key =
       , userState = NewUser
       , startingCounterNumber = 5
       , players = []
+      , opponent = Machine
+      , randomInt = 1
       }
-    , Cmd.none
+    , Random.generate TakeRandom (Random.int 1 3)
     )
 
 
@@ -128,13 +128,19 @@ update msg model =
                 Cmd.none
 
               else
-                sendToBackend <| UserJoined name
+                sendToBackend <| UserJoined name model.opponent model.randomInt
             )
+
+        ChooseOpponent opponentChoice ->
+            ( { model | opponent = opponentChoice }, Cmd.none )
 
         InitiateReset ->
             ( model
             , sendToBackend ResetBeModel
             )
+
+        TakeRandom num ->
+            ( { model | randomInt = num }, Cmd.none )
 
 
 updateFromBackend : ToFrontend -> Model -> ( Model, Cmd FrontendMsg )
@@ -144,12 +150,19 @@ updateFromBackend msg model =
             ( { model | userName = greeting, userState = GamePending }, Cmd.none )
 
         UserBecameClient player ->
-            ( { model | players = List.append model.players [ player ] }
-            , sendToBackend <| ShouldStartGame <| List.length <| List.append model.players [ player ]
+            ( { model | players = player :: model.players }
+            , player
+                :: model.players
+                |> List.length
+                |> ShouldStartGame
+                |> sendToBackend
             )
 
         BeOrdersStart ->
-            ( model, Process.sleep 4000 |> Task.perform (\_ -> StartGame) )
+            ( model
+            , Process.sleep 4000
+                |> Task.perform (\_ -> StartGame)
+            )
 
         UpdatePlayers playersList ->
             ( { model | players = playersList }, Cmd.none )
@@ -161,29 +174,55 @@ updateFromBackend msg model =
                 , userState = NewUser
                 , startingCounterNumber = 5
                 , players = []
+                , opponent = Machine
               }
             , Cmd.none
             )
+
+
+scaled : Int -> Float
+scaled =
+    Element.modular 16 1.25
 
 
 view : Model -> Browser.Document FrontendMsg
 view model =
     { title = ""
     , body =
-        [ Element.layout [ Background.color <| rgb255 1 150 324, Font.color <| rgb255 255 255 255, padding 230 ] <|
+        [ Element.layout [ Background.color <| rgb255 1 150 324, Font.color <| rgb255 255 255 255, paddingXY 0 180 ] <|
             Element.column [ centerX ]
-                [ Element.el [ Font.size 50, paddingEach { top = 0, right = 0, left = 0, bottom = 30 } ] (text "Dobrodošao u igru - Kamen Papir Makaze")
+                [ Element.paragraph [ Font.size <| Basics.round (scaled 5), paddingEach { top = 0, right = 0, left = 20, bottom = 30 } ] [ text "Dobrodošao u igru - Kamen Papir Makaze" ]
                 , Element.column [ width fill, spacing 100, padding 40, center, Background.color <| rgba255 25 105 162 0.3, Border.rounded 3 ]
                     [ case model.userState of
                         NewUser ->
-                            Element.column [ spacing 20, centerX ]
-                                [ Input.text
+                            Element.column
+                                [ spacing 20
+                                , centerX
+                                ]
+                                [ Element.el []
+                                    (Element.wrappedRow []
+                                        [ Input.radio
+                                            [ spacing 30
+                                            , width Element.fill
+                                            , Font.size <| Basics.round (scaled 4)
+                                            ]
+                                            { onChange = ChooseOpponent
+                                            , label = Input.labelAbove [ Font.size <| Basics.round (scaled 4), center, Element.paddingXY 0 20 ] (text "Igram protiv")
+                                            , selected = Just model.opponent
+                                            , options =
+                                                [ Input.optionWith Man (radioOption (Element.text "Čoveka"))
+                                                , Input.optionWith Machine (radioOption (Element.text "Mašine"))
+                                                ]
+                                            }
+                                        ]
+                                    )
+                                , Input.text
                                     [ padding 10
-                                    , spacing 50
+                                    , spacing 30
                                     , Font.color <| rgb255 92 99 118
                                     ]
                                     { onChange = \a -> StoreName a
-                                    , label = Input.labelAbove [ Font.size 34, paddingXY 0 12 ] (text "Molim te upiši svoje ime")
+                                    , label = Input.labelAbove [ Font.size <| Basics.round (scaled 4), paddingXY 0 12 ] (text "Upiši svoje ime")
                                     , text = model.userName
                                     , placeholder = Nothing
                                     }
@@ -202,9 +241,14 @@ view model =
 
                         -- ]
                         GamePending ->
-                            Element.column [ centerX, width <| fillPortion 500, center, spacing 50, Font.size 30 ]
+                            Element.column [ centerX, width <| fillPortion 500, center, spacing 50, Font.size <| Basics.round (scaled 4) ]
                                 [ Element.paragraph [] [ text "Zdravo ", Element.el [ Font.color <| rgb255 255 255 1 ] (text model.userName) ]
-                                , Element.paragraph [] [ text "Čekamo sve učesnike da se priključe..." ]
+                                , case model.opponent of
+                                    Man ->
+                                        Element.paragraph [] [ text "Čekamo sve učesnike da se priključe... Ako nisi, posalji ovaj link drugaru sa kojim želiš da igraš" ]
+
+                                    Machine ->
+                                        Element.paragraph [] [ text "" ]
                                 , Element.paragraph [] <|
                                     let
                                         playersWithoutMe =
@@ -216,12 +260,12 @@ view model =
                                     in
                                     List.map
                                         (\( name, _ ) ->
-                                            Element.el [ center, Font.color <| rgb255 255 87 34 ] (text name)
+                                            Element.el [ center, Font.color <| rgb255 255 255 1 ] (text name)
                                         )
                                         playersWithoutMe
                                 , Element.paragraph [ center ]
                                     [ text <|
-                                        if List.length model.players >= 2 then
+                                        if List.length model.players == 2 then
                                             "će igrati protiv tebe"
 
                                         else
@@ -230,16 +274,16 @@ view model =
                                 ]
 
                         NotChoosen ->
-                            Element.column [ centerX, width fill, center, Font.size 30 ]
+                            Element.column [ centerX, width fill, center, Font.size <| Basics.round (scaled 3) ]
                                 [ Element.paragraph [ center ] [ text <| model.userName ++ "," ]
-                                , Element.row [ centerX, paddingEach { top = 10, right = 0, left = 0, bottom = 50 } ]
+                                , Element.wrappedRow [ centerX, paddingEach { top = 10, right = 0, left = 0, bottom = 50 } ]
                                     [ Input.radio
-                                        [ padding 50
+                                        [ paddingXY 0 50
                                         , spacing 20
-                                        , width (px 100)
+                                        , width Element.fill
                                         ]
                                         { onChange = ChooseSign
-                                        , label = Input.labelAbove [ Font.size 30, center ] (text "izaberi svoj znak:")
+                                        , label = Input.labelAbove [ Font.size <| Basics.round (scaled 4), center ] (text "izaberi svoj znak:")
                                         , selected = Just model.userChoices
                                         , options =
                                             [ Input.optionWith Rock (radioOption (Element.text "Kamen"))
@@ -253,7 +297,7 @@ view model =
 
                         -- TimerDone & ChoosingDone
                         _ ->
-                            Element.column [ centerX, Font.size 20, spacing 20, center ]
+                            Element.column [ centerX, Font.size <| Basics.round (scaled 3), spacing 20, center ]
                                 [ Element.column [ width fill ]
                                     (List.map
                                         (\( name, choice ) ->
@@ -274,7 +318,7 @@ view model =
 
 radioOption : Element msg -> Input.OptionState -> Element msg
 radioOption optionLabel status =
-    Element.row
+    Element.wrappedRow
         [ Element.spacing 10
         , Element.width Element.shrink
         ]
@@ -309,7 +353,7 @@ radioOption optionLabel status =
 
 viewWinner : Model -> Element FrontendMsg
 viewWinner model =
-    Element.column [ width fill, centerX, padding 30, Font.size 30, spacing 30 ]
+    Element.column [ width fill, centerX, padding 30, Font.size <| Basics.round (scaled 4), spacing 30 ]
         [ Element.paragraph
             []
             [ case determineWinner model.players of
@@ -325,7 +369,7 @@ viewWinner model =
             , centerX
             , Background.color <| rgb255 17 75 123
             , Border.rounded 3
-            , Font.size 20
+            , Font.size <| Basics.round (scaled 3)
             , mouseOver <| [ Background.color <| rgb255 17 60 110 ]
             ]
             { onPress = Just InitiateReset
