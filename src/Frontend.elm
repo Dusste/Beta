@@ -176,7 +176,7 @@ updateFromBackend msg model =
                 , players = []
                 , opponent = Machine
               }
-            , Cmd.none
+            , Nav.reload
             )
 
 
