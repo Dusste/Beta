@@ -37,12 +37,12 @@ type alias FrontendModel =
     , startingCounterNumber : Int
     , players : List Player
     , opponent : Opponent
+    , randomInt : Int
     }
 
 
 type alias BackendModel =
     { players : List Player
-    , randomInt : Int
     }
 
 
@@ -56,18 +56,18 @@ type FrontendMsg
     | SendUserName String
     | InitiateReset
     | ChooseOpponent Opponent
+    | TakeRandom Int
 
 
 type ToBackend
-    = UserJoined String Opponent
+    = UserJoined String Opponent Int
     | ShouldStartGame Int
     | TimeIsUp Player
     | ResetBeModel
 
 
 type BackendMsg
-    = InitiateRandom
-    | TakeRandom Int
+    = NoOp
 
 
 type ToFrontend
