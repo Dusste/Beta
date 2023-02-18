@@ -1,8 +1,8 @@
 module Backend exposing (..)
 
+import Dict
+import Evergreen.Migrate.V2 exposing (backendMsg, toFrontend)
 import Lamdera exposing (ClientId, SessionId, broadcast, onConnect, sendToBackend, sendToFrontend)
-import Random
-import Task
 import Types exposing (..)
 
 
@@ -21,12 +21,22 @@ app =
 
 init : ( Model, Cmd BackendMsg )
 init =
-    ( { players = [] }
+    ( { players = Dict.empty, opponent = Machine }
     , Cmd.none
     )
 
 
-getRandomSignAndName : Int -> ( String, UserChoices )
+actionBasedOnOpponent : ToFrontend -> String -> Opponent -> Cmd backendMsg
+actionBasedOnOpponent action clientId opponent =
+    case opponent of
+        Man ->
+            broadcast action
+
+        Machine ->
+            sendToFrontend clientId action
+
+
+getRandomSignAndName : Int -> ( PlayerName, UserChoices )
 getRandomSignAndName num =
     case num of
         1 ->
@@ -55,41 +65,49 @@ updateFromFrontend sessionId clientId msg model =
         UserJoined name opponent randomInt ->
             case opponent of
                 Machine ->
+                    let
+                        ( robotName, robotChoice ) =
+                            getRandomSignAndName randomInt
+
+                        usersBecamePlayers =
+                            Dict.fromList
+                                [ ( "123456789", ( robotName, robotChoice ) )
+                                , ( sessionId, ( name, Scissors ) )
+                                ]
+                    in
                     ( { model
-                        | players =
-                            [ getRandomSignAndName randomInt ]
+                        | players = usersBecamePlayers
                       }
-                    , Cmd.batch
-                        [ broadcast <| UserBecameClient <| getRandomSignAndName randomInt
-                        , broadcast <| UserBecameClient ( name, Scissors )
-                        , sendToFrontend clientId <| UserGreeting <| name
-                        ]
+                    , sendToFrontend clientId <| UserBecamePlayer usersBecamePlayers
                     )
 
                 Man ->
-                    ( { model | players = [] }
-                    , Cmd.batch
-                        [ broadcast <| UserBecameClient ( name, Scissors )
-                        , sendToFrontend clientId <| UserGreeting <| name
-                        ]
+                    let
+                        modifiedPlayers =
+                            Dict.insert sessionId ( name, Scissors ) model.players
+                    in
+                    ( { model | players = modifiedPlayers }
+                    , broadcast <| UserBecamePlayer <| Dict.fromList [ ( sessionId, ( name, Scissors ) ) ]
                     )
 
-        ShouldStartGame numOfPlayers ->
-            ( model
-            , if numOfPlayers == 2 then
-                broadcast <| BeOrdersStart
-
-              else
-                Cmd.none
-            )
-
         TimeIsUp ( userName, userChoices ) ->
-            ( { model | players = ( userName, userChoices ) :: model.players }
-            , broadcast <|
-                UpdatePlayers <|
-                    ( userName, userChoices )
-                        :: model.players
+            let
+                -- @TODO should be update, not working properly
+                modifiedPlayers =
+                    Dict.insert sessionId ( userName, userChoices ) model.players
+            in
+            ( { model | players = modifiedPlayers }
+            , actionBasedOnOpponent (UpdatePlayers modifiedPlayers) clientId model.opponent
             )
 
         ResetBeModel ->
-            ( { model | players = [] }, broadcast RestGame )
+            ( { model | players = Dict.empty }
+            , actionBasedOnOpponent RestGame clientId model.opponent
+            )
+
+        SingnalPlayAgain ->
+            ( model, broadcast <| BroadcastPlayAgain model.players )
+
+        FetchCurrentUser ->
+            -- Invited player needs to see player that have initiated game
+            ( model, broadcast <| SendCurrentPlayer model.players )

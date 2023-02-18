@@ -2,19 +2,33 @@ module Types exposing (..)
 
 import Browser exposing (UrlRequest)
 import Browser.Navigation exposing (Key)
+import Dict exposing (Dict)
+import Lamdera exposing (SessionId)
 import Time
 import Url exposing (Url)
 
 
+type Route
+    = Room RoomId
+    | NotRoom
+    | Reset
+
+
+type RoomId
+    = RoomId Int
+
+
 type alias FrontendModel =
     { key : Key
+    , route : Route
     , userChoices : UserChoices
     , userName : String
-    , userState : UserState
+    , gameStatus : GameStatus
     , startingCounterNumber : Int
-    , players : List Player
+    , players : Dict SessionId Player
     , opponent : Opponent
     , randomInt : Int
+    , urlParamRandomNumber : Int
     }
 
 
@@ -24,7 +38,11 @@ type Opponent
 
 
 type alias Player =
-    ( String, UserChoices )
+    ( PlayerName, UserChoices )
+
+
+type alias PlayerName =
+    String
 
 
 type UserChoices
@@ -33,8 +51,11 @@ type UserChoices
     | Paper
 
 
-type UserState
-    = NewUser
+type GameStatus
+    = OpponentStep
+    | InvitedUser
+    | NewUser
+    | InvitedPlayerGamePending
     | GamePending
     | NotChoosen
     | ChoosingDone
@@ -42,28 +63,32 @@ type UserState
 
 
 type alias BackendModel =
-    { players : List Player
+    { players : Dict SessionId Player
+    , opponent : Opponent
     }
 
 
 type FrontendMsg
     = UrlClicked UrlRequest
     | UrlChanged Url
-    | ChooseSign UserChoices
-    | StartGame
+    | TakeRandom Int
+    | TakeRandomBigger Int
     | Tick Time.Posix
+    | ChooseOpponent Opponent
+    | SendOpponent Opponent
     | StoreName String
     | SendUserName String
-    | InitiateReset
-    | ChooseOpponent Opponent
-    | TakeRandom Int
+    | StartGame
+    | ChooseSign UserChoices
+    | PlayAgainMan FrontendModel
 
 
 type ToBackend
     = UserJoined String Opponent Int
-    | ShouldStartGame Int
     | TimeIsUp Player
     | ResetBeModel
+    | FetchCurrentUser
+    | SingnalPlayAgain
 
 
 type BackendMsg
@@ -71,8 +96,8 @@ type BackendMsg
 
 
 type ToFrontend
-    = UserGreeting String
-    | UserBecameClient Player
-    | BeOrdersStart
-    | UpdatePlayers (List Player)
+    = UserBecamePlayer (Dict SessionId Player)
+    | UpdatePlayers (Dict SessionId Player)
     | RestGame
+    | SendCurrentPlayer (Dict SessionId Player)
+    | BroadcastPlayAgain (Dict SessionId Player)
