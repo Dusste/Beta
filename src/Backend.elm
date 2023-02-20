@@ -3,6 +3,8 @@ module Backend exposing (..)
 import Dict
 import Evergreen.Migrate.V2 exposing (backendMsg, toFrontend)
 import Lamdera exposing (ClientId, SessionId, broadcast, onConnect, sendToBackend, sendToFrontend)
+import Process
+import Task
 import Types exposing (..)
 
 
@@ -21,12 +23,12 @@ app =
 
 init : ( Model, Cmd BackendMsg )
 init =
-    ( { players = Dict.empty, opponent = Machine }
+    ( { players = Dict.empty, opponent = Man }
     , Cmd.none
     )
 
 
-actionBasedOnOpponent : ToFrontend -> String -> Opponent -> Cmd backendMsg
+actionBasedOnOpponent : ToFrontend -> ClientId -> Opponent -> Cmd backendMsg
 actionBasedOnOpponent action clientId opponent =
     case opponent of
         Man ->
@@ -36,73 +38,44 @@ actionBasedOnOpponent action clientId opponent =
             sendToFrontend clientId action
 
 
-getRandomSignAndName : Int -> ( PlayerName, UserChoices )
-getRandomSignAndName num =
-    case num of
-        1 ->
-            ( "Bot22223127", Scissors )
-
-        2 ->
-            ( "Bot898dysag", Rock )
-
-        3 ->
-            ( "Bot113ds433", Paper )
-
-        _ ->
-            ( "Bot90090y3bf", Paper )
-
-
 update : BackendMsg -> Model -> ( Model, Cmd BackendMsg )
 update msg model =
     case msg of
         NoOp ->
             ( model, Cmd.none )
 
+        SignalEnd ->
+            ( model, broadcast SignalEndToFE )
+
 
 updateFromFrontend : SessionId -> ClientId -> ToBackend -> Model -> ( Model, Cmd BackendMsg )
 updateFromFrontend sessionId clientId msg model =
     case msg of
-        UserJoined name opponent randomInt ->
-            case opponent of
-                Machine ->
-                    let
-                        ( robotName, robotChoice ) =
-                            getRandomSignAndName randomInt
-
-                        usersBecamePlayers =
-                            Dict.fromList
-                                [ ( "123456789", ( robotName, robotChoice ) )
-                                , ( sessionId, ( name, Scissors ) )
-                                ]
-                    in
-                    ( { model
-                        | players = usersBecamePlayers
-                      }
-                    , sendToFrontend clientId <| UserBecamePlayer usersBecamePlayers
-                    )
-
-                Man ->
-                    let
-                        modifiedPlayers =
-                            Dict.insert sessionId ( name, Scissors ) model.players
-                    in
-                    ( { model | players = modifiedPlayers }
-                    , broadcast <| UserBecamePlayer <| Dict.fromList [ ( sessionId, ( name, Scissors ) ) ]
-                    )
+        UserJoined name opponent ->
+            let
+                modifiedPlayers =
+                    Dict.insert sessionId ( name, Scissors ) model.players
+            in
+            ( { model | players = modifiedPlayers, opponent = opponent }
+            , broadcast <| UserBecamePlayer modifiedPlayers
+            )
 
         TimeIsUp ( userName, userChoices ) ->
             let
-                -- @TODO should be update, not working properly
                 modifiedPlayers =
                     Dict.insert sessionId ( userName, userChoices ) model.players
             in
             ( { model | players = modifiedPlayers }
-            , actionBasedOnOpponent (UpdatePlayers modifiedPlayers) clientId model.opponent
+            , Process.sleep 2000
+                |> Task.perform (\_ -> SignalEnd)
             )
+
+        AnnounceResults ->
+            ( model, actionBasedOnOpponent (SendFinalResults model.players) clientId model.opponent )
 
         ResetBeModel ->
             ( { model | players = Dict.empty }
-            , actionBasedOnOpponent RestGame clientId model.opponent
+            , actionBasedOnOpponent ResetGame clientId model.opponent
             )
 
         SingnalPlayAgain ->

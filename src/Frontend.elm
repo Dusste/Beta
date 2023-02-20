@@ -58,15 +58,15 @@ initialModel key =
 
 init : Url.Url -> Nav.Key -> ( Model, Cmd FrontendMsg )
 init url key =
+    let
+        initM =
+            initialModel key
+    in
     case parseUrl url of
         Reset ->
             ( initialModel key, sendToBackend ResetBeModel )
 
         Room id ->
-            let
-                initM =
-                    initialModel key
-            in
             ( { initM
                 | gameStatus = InvitedUser
                 , randomInt = invitedPlayerSecretNumber
@@ -83,6 +83,9 @@ init url key =
                 , Random.generate TakeRandomBigger (Random.int 911 1099)
                 ]
             )
+
+        NotFound ->
+            ( { initM | gameStatus = FourOFour }, Cmd.none )
 
 
 update : FrontendMsg -> Model -> ( Model, Cmd FrontendMsg )
@@ -103,7 +106,10 @@ update msg model =
         UrlChanged url ->
             case parseUrl url of
                 Reset ->
-                    ( model, sendToBackend ResetBeModel )
+                    ( model, Cmd.batch [ Random.generate TakeRandom (Random.int 1 3), sendToBackend ResetBeModel ] )
+
+                NotRoom ->
+                    ( { model | gameStatus = OpponentStep }, Cmd.none )
 
                 _ ->
                     ( model, Cmd.none )
@@ -113,26 +119,35 @@ update msg model =
                 counterDone =
                     model.startingCounterNumber == 0
             in
-            ( { model
-                | startingCounterNumber =
+            case model.opponent of
+                Man ->
                     if counterDone then
-                        0
+                        ( { model
+                            | startingCounterNumber = 0
+                            , gameStatus = TimerDone
+                          }
+                        , sendToBackend <| TimeIsUp ( model.userName, model.userChoices )
+                        )
 
                     else
-                        model.startingCounterNumber - 1
-                , gameStatus =
+                        ( { model | startingCounterNumber = model.startingCounterNumber - 1 }, Cmd.none )
+
+                Machine ->
                     if counterDone then
-                        TimerDone
+                        let
+                            updatedPlayers =
+                                Dict.insert "987654321" ( model.userName, model.userChoices ) model.players
+                        in
+                        ( { model
+                            | startingCounterNumber = 0
+                            , players = updatedPlayers
+                            , gameStatus = PresentResults
+                          }
+                        , Cmd.none
+                        )
 
                     else
-                        NotChoosen
-              }
-            , if counterDone then
-                sendToBackend <| TimeIsUp ( model.userName, model.userChoices )
-
-              else
-                Cmd.none
-            )
+                        ( { model | startingCounterNumber = model.startingCounterNumber - 1 }, Cmd.none )
 
         StartGame ->
             ( { model | gameStatus = NotChoosen, startingCounterNumber = 5 }, Cmd.none )
@@ -170,7 +185,7 @@ update msg model =
 
                       else
                         Cmd.batch
-                            [ sendToBackend <| UserJoined name model.opponent model.randomInt
+                            [ sendToBackend <| UserJoined name model.opponent
                             , if model.randomInt == invitedPlayerSecretNumber then
                                 sendToBackend FetchCurrentUser
 
@@ -180,15 +195,27 @@ update msg model =
                     )
 
                 Machine ->
+                    let
+                        ( robotName, robotChoice ) =
+                            getRandomSignAndName model.randomInt
+
+                        usersBecamePlayers =
+                            Dict.fromList
+                                [ ( botSessionId, ( robotName, robotChoice ) )
+                                , ( defaultSessionId, ( model.userName, Scissors ) )
+                                ]
+                    in
                     ( { model
                         | gameStatus =
                             statusBasedOnValidation
+                        , players = usersBecamePlayers
                       }
                     , if notValidName then
                         Cmd.none
 
                       else
-                        sendToBackend <| UserJoined name model.opponent model.randomInt
+                        Process.sleep 4000
+                            |> Task.perform (\_ -> StartGame)
                     )
 
         ChooseOpponent opponentChoice ->
@@ -213,7 +240,7 @@ updateFromBackend msg model =
         UserBecamePlayer onePlayer ->
             let
                 players =
-                    Dict.union model.players onePlayer
+                    Dict.union onePlayer model.players
 
                 shouldStart =
                     Dict.size players == 2
@@ -250,10 +277,13 @@ updateFromBackend msg model =
         SendCurrentPlayer players ->
             ( { model | players = players, gameStatus = InvitedPlayerGamePending }, Cmd.none )
 
-        UpdatePlayers players ->
-            ( { model | players = players }, Cmd.none )
+        SignalEndToFE ->
+            ( model, sendToBackend AnnounceResults )
 
-        RestGame ->
+        SendFinalResults players ->
+            ( { model | players = players, gameStatus = PresentResults }, Cmd.none )
+
+        ResetGame ->
             ( { model
                 | userChoices = Scissors
                 , userName = ""
@@ -455,8 +485,32 @@ view model =
                                 , Element.paragraph [ center ] [ text <| "Imate još: " ++ String.fromInt model.startingCounterNumber ++ " sekundi" ]
                                 ]
 
-                        -- TimerDone & ChoosingDone
-                        _ ->
+                        FourOFour ->
+                            Element.column [ centerX, Font.size <| Basics.round (scaled 3), spacing 20, center ]
+                                [ Element.paragraph [ center ]
+                                    [ text "Izgleda da si se izgubio :( Nema ništa na ovoj strani" ]
+                                , link
+                                    [ padding 10
+                                    , spacing 0
+                                    , centerX
+                                    , Background.color <| rgb255 17 75 123
+                                    , Border.rounded 3
+                                    , Font.size <| Basics.round (scaled 3)
+                                    , mouseOver <| [ Background.color <| rgb255 17 60 110 ]
+                                    ]
+                                    { url = "/"
+                                    , label = Element.text "Vrati se na početak"
+                                    }
+                                ]
+
+                        TimerDone ->
+                            Element.column [ centerX, Font.size <| Basics.round (scaled 3), spacing 20, center ]
+                                [ Element.paragraph [ center ]
+                                    [ text "Imaćemo pobednika uskoro ..."
+                                    ]
+                                ]
+
+                        PresentResults ->
                             Element.column [ centerX, Font.size <| Basics.round (scaled 3), spacing 20, center ]
                                 [ Element.column [ width fill ]
                                     (model.players
@@ -475,3 +529,60 @@ view model =
                 ]
         ]
     }
+
+
+viewWinner : FrontendModel -> Element FrontendMsg
+viewWinner model =
+    Element.column [ width fill, centerX, padding 30, Font.size <| Basics.round (scaled 4), spacing 30 ]
+        [ Element.paragraph
+            []
+            [ case determineWinner <| Dict.toList model.players of
+                Just ( _, ( winnerName, winnerChoice ) ) ->
+                    text <| "Pobednik je " ++ winnerName ++ " sa izborom " ++ choiceToString winnerChoice ++ "! Čestitamo !"
+
+                Nothing ->
+                    text "Nema pobednika, izabrali ste isti znak"
+            ]
+        , case model.opponent of
+            Man ->
+                Element.row [ width fill, centerX, padding 30, Font.size <| Basics.round (scaled 4), spacing 30 ]
+                    [ Input.button
+                        [ padding 10
+                        , spacing 0
+                        , centerX
+                        , Background.color <| rgb255 17 75 123
+                        , Border.rounded 3
+                        , Font.size <| Basics.round (scaled 3)
+                        , mouseOver <| [ Background.color <| rgb255 17 60 110 ]
+                        ]
+                        { onPress = Just <| PlayAgainMan model
+                        , label = Element.text "Igraj ponovo"
+                        }
+                    , link
+                        [ padding 10
+                        , spacing 0
+                        , centerX
+                        , Background.color <| rgb255 17 75 123
+                        , Border.rounded 3
+                        , Font.size <| Basics.round (scaled 3)
+                        , mouseOver <| [ Background.color <| rgb255 17 60 110 ]
+                        ]
+                        { url = "/reset"
+                        , label = Element.text "Resetuj Igru"
+                        }
+                    ]
+
+            Machine ->
+                link
+                    [ padding 10
+                    , spacing 0
+                    , centerX
+                    , Background.color <| rgb255 17 75 123
+                    , Border.rounded 3
+                    , Font.size <| Basics.round (scaled 3)
+                    , mouseOver <| [ Background.color <| rgb255 17 60 110 ]
+                    ]
+                    { url = "/reset"
+                    , label = Element.text "Resetuj igru"
+                    }
+        ]

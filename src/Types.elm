@@ -3,7 +3,7 @@ module Types exposing (..)
 import Browser exposing (UrlRequest)
 import Browser.Navigation exposing (Key)
 import Dict exposing (Dict)
-import Lamdera exposing (SessionId)
+import Lamdera exposing (ClientId, SessionId)
 import Time
 import Url exposing (Url)
 
@@ -12,6 +12,7 @@ type Route
     = Room RoomId
     | NotRoom
     | Reset
+    | NotFound
 
 
 type RoomId
@@ -58,14 +59,33 @@ type GameStatus
     | InvitedPlayerGamePending
     | GamePending
     | NotChoosen
-    | ChoosingDone
     | TimerDone
+    | PresentResults
+    | FourOFour
 
 
 type alias BackendModel =
     { players : Dict SessionId Player
     , opponent : Opponent
     }
+
+
+type alias BotSessionId =
+    String
+
+
+botSessionId : BotSessionId
+botSessionId =
+    "123456789"
+
+
+type alias DefaultSessionId =
+    String
+
+
+defaultSessionId : DefaultSessionId
+defaultSessionId =
+    "987654321"
 
 
 type FrontendMsg
@@ -84,20 +104,23 @@ type FrontendMsg
 
 
 type ToBackend
-    = UserJoined String Opponent Int
+    = UserJoined PlayerName Opponent
     | TimeIsUp Player
     | ResetBeModel
     | FetchCurrentUser
     | SingnalPlayAgain
+    | AnnounceResults
 
 
 type BackendMsg
     = NoOp
+    | SignalEnd
 
 
 type ToFrontend
     = UserBecamePlayer (Dict SessionId Player)
-    | UpdatePlayers (Dict SessionId Player)
-    | RestGame
+    | ResetGame
     | SendCurrentPlayer (Dict SessionId Player)
     | BroadcastPlayAgain (Dict SessionId Player)
+    | SendFinalResults (Dict SessionId Player)
+    | SignalEndToFE

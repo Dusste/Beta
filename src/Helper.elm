@@ -1,10 +1,7 @@
 module Helper exposing (..)
 
-import Dict
 import Element exposing (..)
-import Element.Background as Background
 import Element.Border as Border
-import Element.Font as Font
 import Element.Input as Input
 import Lamdera exposing (SessionId)
 import Types exposing (..)
@@ -19,7 +16,7 @@ parseUrl url =
             route
 
         Nothing ->
-            NotRoom
+            NotFound
 
 
 roomIdParser : Parser (RoomId -> a) a
@@ -80,63 +77,6 @@ radioOption optionLabel status =
             ]
             Element.none
         , Element.el [ Element.width Element.fill ] optionLabel
-        ]
-
-
-viewWinner : FrontendModel -> Element FrontendMsg
-viewWinner model =
-    Element.column [ width fill, centerX, padding 30, Font.size <| Basics.round (scaled 4), spacing 30 ]
-        [ Element.paragraph
-            []
-            [ case determineWinner <| Dict.toList model.players of
-                Just ( _, ( winnerName, winnerChoice ) ) ->
-                    text <| "Pobednik je " ++ winnerName ++ " sa izborom " ++ choiceToString winnerChoice ++ "! Čestitamo !"
-
-                Nothing ->
-                    text "Nema pobednika, izabrali ste isti znak"
-            ]
-        , case model.opponent of
-            Man ->
-                Element.row [ width fill, centerX, padding 30, Font.size <| Basics.round (scaled 4), spacing 30 ]
-                    [ Input.button
-                        [ padding 10
-                        , spacing 0
-                        , centerX
-                        , Background.color <| rgb255 17 75 123
-                        , Border.rounded 3
-                        , Font.size <| Basics.round (scaled 3)
-                        , mouseOver <| [ Background.color <| rgb255 17 60 110 ]
-                        ]
-                        { onPress = Just <| PlayAgainMan model
-                        , label = Element.text "Igraj ponovo"
-                        }
-                    , link
-                        [ padding 10
-                        , spacing 0
-                        , centerX
-                        , Background.color <| rgb255 17 75 123
-                        , Border.rounded 3
-                        , Font.size <| Basics.round (scaled 3)
-                        , mouseOver <| [ Background.color <| rgb255 17 60 110 ]
-                        ]
-                        { url = "/reset"
-                        , label = Element.text "Resetuj Igru"
-                        }
-                    ]
-
-            Machine ->
-                link
-                    [ padding 10
-                    , spacing 0
-                    , centerX
-                    , Background.color <| rgb255 17 75 123
-                    , Border.rounded 3
-                    , Font.size <| Basics.round (scaled 3)
-                    , mouseOver <| [ Background.color <| rgb255 17 60 110 ]
-                    ]
-                    { url = "/reset"
-                    , label = Element.text "Resetuj igru"
-                    }
         ]
 
 
@@ -223,3 +163,19 @@ compareChoices tup =
 
         ( Paper, Paper ) ->
             EQ
+
+
+getRandomSignAndName : Int -> ( PlayerName, UserChoices )
+getRandomSignAndName num =
+    case num of
+        1 ->
+            ( "Bot22223127", Scissors )
+
+        2 ->
+            ( "Bot898dysag", Rock )
+
+        3 ->
+            ( "Bot113ds433", Paper )
+
+        _ ->
+            ( "Bot90090y3bf", Paper )
