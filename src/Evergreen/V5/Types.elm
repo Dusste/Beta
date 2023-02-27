@@ -70,20 +70,6 @@ type alias BackendModel =
     }
 
 
-type alias FrontendModel =
-    { key : Browser.Navigation.Key
-    , route : Route
-    , userChoices : UserChoices
-    , userName : String
-    , gameStatus : GameStatus
-    , startingCounterNumber : Int
-    , players : Dict.Dict Lamdera.SessionId Player
-    , opponent : Opponent
-    , randomInt : Int
-    , urlParamRandomNumber : Int
-    }
-
-
 type FrontendMsg
     = UrlClicked Browser.UrlRequest
     | UrlChanged Url.Url

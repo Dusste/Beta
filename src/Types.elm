@@ -9,14 +9,22 @@ import Url exposing (Url)
 
 
 type Route
-    = Room RoomId
-    | NotRoom
+    = Room RoomParam
+    | Home
     | Reset
+    | GameOver
     | NotFound
 
 
-type RoomId
-    = RoomId Int
+type RoomParam
+    = RoomParam Int
+
+
+type alias BackendModel =
+    { playersStructure : Dict RoomId RoomUnit
+    , playersQueue : List ( ClientId, PlayerName )
+    , roomId : Int
+    }
 
 
 type alias FrontendModel =
@@ -26,20 +34,80 @@ type alias FrontendModel =
     , userName : String
     , gameStatus : GameStatus
     , startingCounterNumber : Int
-    , players : Dict SessionId Player
+    , players : Dict ClientId PlayerFE
     , opponent : Opponent
     , randomInt : Int
     , urlParamRandomNumber : Int
+    , standings : Dict ClientId GameResult
     }
+
+
+type alias RoomUnit =
+    { player1 : PlayerBE
+    , player2 : PlayerBE
+    }
+
+
+type alias PlayerFE =
+    ( RoomId, PlayerName, UserChoices )
+
+
+defaultPlayerFE : PlayerFE
+defaultPlayerFE =
+    ( 1, "", Scissors )
+
+
+type alias PlayerBE =
+    { id : ClientId
+    , playerName : PlayerName
+    , userChoice : UserChoices
+    }
+
+
+playerBE : PlayerBE
+playerBE =
+    PlayerBE "" "" Scissors
+
+
+type alias RoomId =
+    Int
 
 
 type Opponent
     = Man
-    | Machine
+    | Machine (Maybe GameResult)
 
 
-type alias Player =
-    ( PlayerName, UserChoices )
+type alias GameResult =
+    { user : PlayerName
+    , win : Int
+    , lose : Int
+    , tie : Int
+    }
+
+
+defaultGameResult : GameResult
+defaultGameResult =
+    { user = ""
+    , win = 0
+    , lose = 0
+    , tie = 0
+    }
+
+
+type alias DefaultPlayerBEUnit =
+    { player1 : PlayerBE
+    , player2 : PlayerBE
+    }
+
+
+defaultPlayersUnit : DefaultPlayerBEUnit
+defaultPlayersUnit =
+    { player1 =
+        playerBE
+    , player2 =
+        playerBE
+    }
 
 
 type alias PlayerName =
@@ -64,27 +132,21 @@ type GameStatus
     | FourOFour
 
 
-type alias BackendModel =
-    { players : Dict SessionId Player
-    , opponent : Opponent
-    }
-
-
 type alias BotSessionId =
     String
 
 
-botSessionId : BotSessionId
-botSessionId =
+botClientId : BotSessionId
+botClientId =
     "123456789"
 
 
-type alias DefaultSessionId =
+type alias DefaultClientId =
     String
 
 
-defaultSessionId : DefaultSessionId
-defaultSessionId =
+defaultClientId : DefaultClientId
+defaultClientId =
     "987654321"
 
 
@@ -101,26 +163,30 @@ type FrontendMsg
     | StartGame
     | ChooseSign UserChoices
     | PlayAgainMan FrontendModel
+    | PlayAgainMachine FrontendModel (Dict ClientId GameResult)
 
 
 type ToBackend
-    = UserJoined PlayerName Opponent
-    | TimeIsUp Player
-    | ResetBeModel
-    | FetchCurrentUser
-    | SingnalPlayAgain
-    | AnnounceResults
+    = UserJoined PlayerName
+    | TimeIsUp PlayerFE
+    | ResetBeModel RoomId
+    | SignalPlayAgain RoomId
+    | AnnounceResults RoomId
+    | GameOverToBE RoomId
 
 
 type BackendMsg
-    = NoOp
-    | SignalEnd
+    = SignalGameStart
+    | SignalEnd ClientId
+    | InterruptGame SessionId ClientId
+    | CheckRoomPlayers SessionId ClientId
+    | NoOp
 
 
 type ToFrontend
-    = UserBecamePlayer (Dict SessionId Player)
-    | ResetGame
-    | SendCurrentPlayer (Dict SessionId Player)
-    | BroadcastPlayAgain (Dict SessionId Player)
-    | SendFinalResults (Dict SessionId Player)
+    = UserBecamePlayer (Dict ClientId PlayerFE) Bool
+    | ResetOrOverGame
+    | SendCurrentPlayer (Dict ClientId PlayerFE)
+    | BroadcastPlayAgain (Dict ClientId PlayerFE)
+    | SendFinalResults (Dict ClientId PlayerFE)
     | SignalEndToFE

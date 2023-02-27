@@ -12,6 +12,7 @@ import Helper exposing (..)
 import Lamdera exposing (sendToBackend)
 import Process
 import Random
+import Tailwind.Utilities exposing (border)
 import Task
 import Time
 import Types exposing (..)
@@ -49,10 +50,11 @@ initialModel key =
     , gameStatus = OpponentStep
     , startingCounterNumber = 5
     , players = Dict.empty
-    , opponent = Machine
+    , opponent = Machine Nothing
     , randomInt = 1
-    , route = NotRoom
+    , route = Home
     , urlParamRandomNumber = 1
+    , standings = Dict.empty
     }
 
 
@@ -63,20 +65,18 @@ init url key =
             initialModel key
     in
     case parseUrl url of
-        Reset ->
-            ( initialModel key, sendToBackend ResetBeModel )
-
-        Room id ->
+        Room (RoomParam roomId) ->
             ( { initM
                 | gameStatus = InvitedUser
-                , randomInt = invitedPlayerSecretNumber
-                , route = Room id
+                , randomInt = 1
+                , route = Room (RoomParam roomId)
                 , opponent = Man
+                , urlParamRandomNumber = roomId
               }
             , Cmd.none
             )
 
-        NotRoom ->
+        Home ->
             ( initialModel key
             , Cmd.batch
                 [ Random.generate TakeRandom (Random.int 1 3)
@@ -86,6 +86,9 @@ init url key =
 
         NotFound ->
             ( { initM | gameStatus = FourOFour }, Cmd.none )
+
+        _ ->
+            ( initM, Cmd.none )
 
 
 update : FrontendMsg -> Model -> ( Model, Cmd FrontendMsg )
@@ -106,10 +109,38 @@ update msg model =
         UrlChanged url ->
             case parseUrl url of
                 Reset ->
-                    ( model, Cmd.batch [ Random.generate TakeRandom (Random.int 1 3), sendToBackend ResetBeModel ] )
+                    let
+                        ( roomId, _, _ ) =
+                            -- Both players are in same room
+                            model.players
+                                |> Dict.toList
+                                |> List.head
+                                |> Maybe.withDefault ( defaultClientId, defaultPlayerFE )
+                                |> Tuple.second
+                    in
+                    ( model, sendToBackend <| ResetBeModel roomId )
 
-                NotRoom ->
+                Home ->
                     ( { model | gameStatus = OpponentStep }, Cmd.none )
+
+                GameOver ->
+                    let
+                        ( roomId, _, _ ) =
+                            -- Both players are in same room
+                            model.players
+                                |> Dict.toList
+                                |> List.head
+                                |> Maybe.withDefault ( defaultClientId, defaultPlayerFE )
+                                |> Tuple.second
+                    in
+                    ( { model
+                        | gameStatus = OpponentStep
+                        , startingCounterNumber = 5
+                        , players = Dict.empty
+                        , standings = Dict.empty
+                      }
+                    , sendToBackend <| GameOverToBE roomId
+                    )
 
                 _ ->
                     ( model, Cmd.none )
@@ -122,21 +153,30 @@ update msg model =
             case model.opponent of
                 Man ->
                     if counterDone then
+                        let
+                            ( roomId, _, _ ) =
+                                -- Both players are in same room
+                                model.players
+                                    |> Dict.toList
+                                    |> List.head
+                                    |> Maybe.withDefault ( defaultClientId, defaultPlayerFE )
+                                    |> Tuple.second
+                        in
                         ( { model
                             | startingCounterNumber = 0
                             , gameStatus = TimerDone
                           }
-                        , sendToBackend <| TimeIsUp ( model.userName, model.userChoices )
+                        , sendToBackend <| TimeIsUp ( roomId, model.userName, model.userChoices )
                         )
 
                     else
                         ( { model | startingCounterNumber = model.startingCounterNumber - 1 }, Cmd.none )
 
-                Machine ->
+                Machine _ ->
                     if counterDone then
                         let
                             updatedPlayers =
-                                Dict.insert "987654321" ( model.userName, model.userChoices ) model.players
+                                Dict.insert defaultClientId ( invitedPlayerSecretNumber, model.userName, model.userChoices ) model.players
                         in
                         ( { model
                             | startingCounterNumber = 0
@@ -185,24 +225,20 @@ update msg model =
 
                       else
                         Cmd.batch
-                            [ sendToBackend <| UserJoined name model.opponent
-                            , if model.randomInt == invitedPlayerSecretNumber then
-                                sendToBackend FetchCurrentUser
-
-                              else
-                                Nav.pushUrl model.key roomPath
+                            [ sendToBackend <| UserJoined name
+                            , Nav.pushUrl model.key roomPath
                             ]
                     )
 
-                Machine ->
+                Machine _ ->
                     let
-                        ( robotName, robotChoice ) =
+                        robotChoice =
                             getRandomSignAndName model.randomInt
 
                         usersBecamePlayers =
                             Dict.fromList
-                                [ ( botSessionId, ( robotName, robotChoice ) )
-                                , ( defaultSessionId, ( model.userName, Scissors ) )
+                                [ ( botClientId, ( invitedPlayerSecretNumber, "Bot", robotChoice ) )
+                                , ( defaultClientId, ( invitedPlayerSecretNumber, model.userName, Scissors ) )
                                 ]
                     in
                     ( { model
@@ -231,16 +267,46 @@ update msg model =
             ( { model | urlParamRandomNumber = num }, Cmd.none )
 
         PlayAgainMan oldModel ->
-            ( { oldModel | gameStatus = NotChoosen }, sendToBackend SingnalPlayAgain )
+            let
+                ( roomId, _, _ ) =
+                    -- Both players are in same room
+                    model.players
+                        |> Dict.toList
+                        |> List.head
+                        |> Maybe.withDefault ( defaultClientId, defaultPlayerFE )
+                        |> Tuple.second
+            in
+            ( { oldModel | gameStatus = NotChoosen }, sendToBackend <| SignalPlayAgain roomId )
+
+        PlayAgainMachine oldModel gameResults ->
+            let
+                gameResultSum =
+                    Dict.merge
+                        Dict.insert
+                        (\clientId oldStats newStats acc ->
+                            Dict.insert clientId
+                                { user = oldStats.user
+                                , win = oldStats.win + newStats.win
+                                , lose = oldStats.lose + newStats.lose
+                                , tie = oldStats.tie + newStats.tie
+                                }
+                                acc
+                        )
+                        Dict.insert
+                        model.standings
+                        gameResults
+                        Dict.empty
+            in
+            ( { oldModel | gameStatus = NotChoosen, startingCounterNumber = 5, standings = gameResultSum }, Random.generate TakeRandom (Random.int 1 3) )
 
 
 updateFromBackend : ToFrontend -> Model -> ( Model, Cmd FrontendMsg )
 updateFromBackend msg model =
     case msg of
-        UserBecamePlayer onePlayer ->
+        UserBecamePlayer player isInvited ->
             let
                 players =
-                    Dict.union onePlayer model.players
+                    Dict.union player model.players
 
                 shouldStart =
                     Dict.size players == 2
@@ -248,20 +314,11 @@ updateFromBackend msg model =
             ( { model
                 | players = players
                 , gameStatus =
-                    case model.opponent of
-                        Machine ->
-                            if shouldStart then
-                                GamePending
+                    if isInvited then
+                        InvitedPlayerGamePending
 
-                            else
-                                NewUser
-
-                        Man ->
-                            if model.randomInt == invitedPlayerSecretNumber then
-                                InvitedPlayerGamePending
-
-                            else
-                                GamePending
+                    else
+                        GamePending
               }
             , if shouldStart then
                 Process.sleep 4000
@@ -278,20 +335,29 @@ updateFromBackend msg model =
             ( { model | players = players, gameStatus = InvitedPlayerGamePending }, Cmd.none )
 
         SignalEndToFE ->
-            ( model, sendToBackend AnnounceResults )
+            let
+                ( roomId, _, _ ) =
+                    -- Both players are in same room
+                    model.players
+                        |> Dict.toList
+                        |> List.head
+                        |> Maybe.withDefault ( defaultClientId, defaultPlayerFE )
+                        |> Tuple.second
+            in
+            ( model, sendToBackend <| AnnounceResults roomId )
 
         SendFinalResults players ->
             ( { model | players = players, gameStatus = PresentResults }, Cmd.none )
 
-        ResetGame ->
+        ResetOrOverGame ->
             ( { model
                 | userChoices = Scissors
                 , userName = ""
                 , gameStatus = OpponentStep
                 , startingCounterNumber = 5
                 , players = Dict.empty
-                , opponent = Machine
-                , route = NotRoom
+                , opponent = Machine Nothing
+                , route = Home
               }
             , Nav.pushUrl model.key "/"
             )
@@ -303,8 +369,8 @@ view model =
     , body =
         [ Element.layout [ Background.color <| rgb255 1 150 324, Font.color <| rgb255 255 255 255, paddingXY 0 180 ] <|
             Element.column [ centerX ]
-                [ Element.paragraph [ Font.size <| Basics.round (scaled 5), paddingEach { top = 0, right = 0, left = 20, bottom = 30 } ] [ text "Dobrodošao u igru - Kamen Papir Makaze" ]
-                , Element.column [ width fill, spacing 100, padding 40, center, Background.color <| rgba255 25 105 162 0.3, Border.rounded 3 ]
+                [ Element.wrappedRow [] [ Element.paragraph [ Font.size <| Basics.round (scaled 4), paddingEach { top = 0, right = 0, left = 20, bottom = 30 } ] [ text "Dobrodošao u igru - Kamen Papir Makaze" ] ]
+                , Element.column [ width fill, spacing 50, paddingXY 0 20, center, Background.color <| rgba255 25 105 162 0.3, Border.rounded 3 ]
                     [ case model.gameStatus of
                         OpponentStep ->
                             Element.column
@@ -323,7 +389,7 @@ view model =
                                             , selected = Just model.opponent
                                             , options =
                                                 [ Input.optionWith Man (radioOption (Element.text "Čoveka"))
-                                                , Input.optionWith Machine (radioOption (Element.text "Mašine"))
+                                                , Input.optionWith (Machine Nothing) (radioOption (Element.text "Mašine"))
                                                 ]
                                             }
                                         ]
@@ -382,11 +448,11 @@ view model =
                                     (model.players
                                         |> Dict.toList
                                         |> List.filter
-                                            (\( _, ( playerName, _ ) ) ->
+                                            (\( _, ( _, playerName, _ ) ) ->
                                                 not <| String.contains playerName model.userName
                                             )
                                         |> List.map
-                                            (\( _, ( name, _ ) ) ->
+                                            (\( _, ( _, name, _ ) ) ->
                                                 Element.el [ center, Font.color <| rgb255 255 255 1 ] (text name)
                                             )
                                     )
@@ -445,11 +511,11 @@ view model =
                                     (model.players
                                         |> Dict.toList
                                         |> List.filter
-                                            (\( _, ( playerName, _ ) ) ->
+                                            (\( _, ( _, playerName, _ ) ) ->
                                                 not <| String.contains playerName model.userName
                                             )
                                         |> List.map
-                                            (\( _, ( name, _ ) ) ->
+                                            (\( _, ( _, name, _ ) ) ->
                                                 Element.el [ center, Font.color <| rgb255 255 255 1 ] (text name)
                                             )
                                     )
@@ -516,11 +582,11 @@ view model =
                                     (model.players
                                         |> Dict.toList
                                         |> List.map
-                                            (\( _, ( name, choice ) ) ->
+                                            (\( _, ( _, name, choice ) ) ->
                                                 Element.paragraph [ padding 10 ] [ text <| "Učesnik " ++ name ++ " je izabrao " ++ choiceToString choice ]
                                             )
                                     )
-                                , Element.paragraph [ center ]
+                                , Element.paragraph []
                                     [ viewWinner
                                         model
                                     ]
@@ -533,56 +599,162 @@ view model =
 
 viewWinner : FrontendModel -> Element FrontendMsg
 viewWinner model =
-    Element.column [ width fill, centerX, padding 30, Font.size <| Basics.round (scaled 4), spacing 30 ]
+    let
+        -- Dict.fromList [ ( "123456789", { lose = 1, tie = 0, user = "Bot", win = 0 } ), ( "987654321", { lose = 0, tie = 0, user = "dsa", win = 1 } ) ]
+        calcPoints : Int -> Int -> String
+        calcPoints win tie =
+            let
+                point =
+                    if win > 0 then
+                        win + 1
+
+                    else if tie == 1 then
+                        tie
+
+                    else
+                        win
+            in
+            point |> String.fromInt
+
+        winnerDict =
+            case determineWinner <| Dict.toList model.players of
+                Just ( _, ( _, winnerName, _ ) ) ->
+                    let
+                        updatedStandings =
+                            model.players
+                                |> Dict.foldl
+                                    (\currClientId ( _, playerName, _ ) sum ->
+                                        if winnerName == playerName then
+                                            Dict.insert currClientId { user = playerName, win = 1, lose = 0, tie = 0 } sum
+
+                                        else
+                                            Dict.insert currClientId { user = playerName, win = 0, lose = 1, tie = 0 } sum
+                                    )
+                                    Dict.empty
+                    in
+                    updatedStandings
+
+                Nothing ->
+                    let
+                        updatedStandings =
+                            model.players
+                                |> Dict.foldl
+                                    (\currClientId ( _, playerName, _ ) sum ->
+                                        Dict.insert currClientId { user = playerName, win = 0, lose = 0, tie = 1 } sum
+                                    )
+                                    Dict.empty
+                    in
+                    updatedStandings
+    in
+    Element.column [ width fill, centerX, paddingXY 0 30, Font.size <| Basics.round (scaled 4), spacing 30 ]
         [ Element.paragraph
             []
             [ case determineWinner <| Dict.toList model.players of
-                Just ( _, ( winnerName, winnerChoice ) ) ->
+                Just ( _, ( _, winnerName, winnerChoice ) ) ->
                     text <| "Pobednik je " ++ winnerName ++ " sa izborom " ++ choiceToString winnerChoice ++ "! Čestitamo !"
 
                 Nothing ->
                     text "Nema pobednika, izabrali ste isti znak"
             ]
-        , case model.opponent of
-            Man ->
-                Element.row [ width fill, centerX, padding 30, Font.size <| Basics.round (scaled 4), spacing 30 ]
-                    [ Input.button
-                        [ padding 10
-                        , spacing 0
-                        , centerX
-                        , Background.color <| rgb255 17 75 123
-                        , Border.rounded 3
-                        , Font.size <| Basics.round (scaled 3)
-                        , mouseOver <| [ Background.color <| rgb255 17 60 110 ]
-                        ]
-                        { onPress = Just <| PlayAgainMan model
-                        , label = Element.text "Igraj ponovo"
-                        }
-                    , link
-                        [ padding 10
-                        , spacing 0
-                        , centerX
-                        , Background.color <| rgb255 17 75 123
-                        , Border.rounded 3
-                        , Font.size <| Basics.round (scaled 3)
-                        , mouseOver <| [ Background.color <| rgb255 17 60 110 ]
-                        ]
-                        { url = "/reset"
-                        , label = Element.text "Resetuj Igru"
-                        }
-                    ]
 
-            Machine ->
-                link
-                    [ padding 10
-                    , spacing 0
-                    , centerX
-                    , Background.color <| rgb255 17 75 123
-                    , Border.rounded 3
-                    , Font.size <| Basics.round (scaled 3)
-                    , mouseOver <| [ Background.color <| rgb255 17 60 110 ]
+        -- @TODO reset game should be approved by second participant
+        -- , link
+        --     [ padding 10
+        --     , spacing 0
+        --     , centerX
+        --     , Background.color <| rgb255 17 75 123
+        --     , Border.rounded 3
+        --     , Font.size <| Basics.round (scaled 3)
+        --     , mouseOver <| [ Background.color <| rgb255 17 60 110 ]
+        --     ]
+        --     { url = "/reset"
+        --     , label = Element.text "Resetuj Igru"
+        --     }
+        , Element.wrappedRow [ width fill, centerX, padding 30, Font.size <| Basics.round (scaled 4), spacing 30 ]
+            [ Input.button
+                [ padding 10
+                , spacing 0
+                , centerX
+                , Background.color <| rgb255 17 75 123
+                , Border.rounded 3
+                , Font.size <| Basics.round (scaled 3)
+                , mouseOver <| [ Background.color <| rgb255 17 60 110 ]
+                ]
+                { onPress =
+                    if model.opponent == Man then
+                        Just <| PlayAgainMan model
+
+                    else
+                        Just <| PlayAgainMachine model winnerDict
+                , label = Element.text "Igraj ponovo"
+                }
+            , link
+                [ padding 10
+                , spacing 0
+                , centerX
+                , Background.color <| rgb255 17 75 123
+                , Border.rounded 3
+                , Font.size <| Basics.round (scaled 3)
+                , mouseOver <| [ Background.color <| rgb255 17 60 110 ]
+                ]
+                { url = "/over"
+                , label = Element.text "Izadji iz igre"
+                }
+            ]
+        , Element.wrappedRow [ width fill, centerX, Font.size <| Basics.round (scaled 3) ]
+            [ Element.table [ Border.width 1, Border.solid, Border.color <| rgb255 255 255 255, spacingXY 0 10, padding 10 ]
+                { data =
+                    Dict.merge
+                        Dict.insert
+                        (\clientId oldStats newStats acc ->
+                            Dict.insert clientId
+                                { user = oldStats.user
+                                , win = oldStats.win + newStats.win
+                                , lose = oldStats.lose + newStats.lose
+                                , tie = oldStats.tie + newStats.tie
+                                }
+                                acc
+                        )
+                        Dict.insert
+                        model.standings
+                        winnerDict
+                        Dict.empty
+                        |> Dict.toList
+                        |> List.map Tuple.second
+                        |> List.sortBy .lose
+                , columns =
+                    [ { header = Element.el [ Border.widthEach { bottom = 1, left = 0, right = 0, top = 0 }, Border.solid, Border.color <| rgb255 255 255 255, paddingEach { bottom = 3, left = 0, right = 0, top = 0 } ] (text "Ime")
+                      , width = fill
+                      , view =
+                            \person ->
+                                Element.text person.user
+                      }
+                    , { header = Element.el [ Border.widthEach { bottom = 1, left = 0, right = 0, top = 0 }, Border.solid, Border.color <| rgb255 255 255 255, paddingEach { bottom = 3, left = 0, right = 0, top = 0 } ] (text "Pobeda")
+                      , width = fill
+                      , view =
+                            \person ->
+                                Element.text <| String.fromInt person.win
+                      }
+                    , { header = Element.el [ Border.widthEach { bottom = 1, left = 0, right = 0, top = 0 }, Border.solid, Border.color <| rgb255 255 255 255, paddingEach { bottom = 3, left = 0, right = 0, top = 0 } ] (text "Poraz")
+                      , width = fill
+                      , view =
+                            \person ->
+                                Element.text <| String.fromInt person.lose
+                      }
+                    , { header = Element.el [ Border.widthEach { bottom = 1, left = 0, right = 0, top = 0 }, Border.solid, Border.color <| rgb255 255 255 255, paddingEach { bottom = 3, left = 0, right = 0, top = 0 } ] (text "Nerešeno")
+                      , width = fill
+                      , view =
+                            \person ->
+                                Element.text <| String.fromInt person.tie
+                      }
+                    , { header = Element.el [ Border.widthEach { bottom = 1, left = 0, right = 0, top = 0 }, Border.solid, Border.color <| rgb255 255 255 255, paddingEach { bottom = 3, left = 0, right = 0, top = 0 } ] (text "Poeni")
+                      , width = fill
+                      , view =
+                            \person ->
+                                Element.text <|
+                                    calcPoints person.win person.tie
+                      }
                     ]
-                    { url = "/reset"
-                    , label = Element.text "Resetuj igru"
-                    }
+                }
+            ]
         ]

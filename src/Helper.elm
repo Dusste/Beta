@@ -3,7 +3,7 @@ module Helper exposing (..)
 import Element exposing (..)
 import Element.Border as Border
 import Element.Input as Input
-import Lamdera exposing (SessionId)
+import Lamdera exposing (ClientId)
 import Types exposing (..)
 import Url exposing (Url)
 import Url.Parser as Parser exposing ((</>), Parser)
@@ -19,19 +19,20 @@ parseUrl url =
             NotFound
 
 
-roomIdParser : Parser (RoomId -> a) a
+roomIdParser : Parser (RoomParam -> a) a
 roomIdParser =
-    Parser.custom "ROOMID" <|
-        \roomId ->
-            Maybe.map RoomId (String.toInt roomId)
+    Parser.custom "ROOMPARAM" <|
+        \roomParam ->
+            Maybe.map RoomParam (String.toInt roomParam)
 
 
 matchRoute : Parser (Route -> a) a
 matchRoute =
     Parser.oneOf
-        [ Parser.map NotRoom Parser.top
+        [ Parser.map Home Parser.top
         , Parser.map Room (Parser.s "room" </> roomIdParser)
         , Parser.map Reset (Parser.s "reset")
+        , Parser.map GameOver (Parser.s "over")
         ]
 
 
@@ -80,45 +81,34 @@ radioOption optionLabel status =
         ]
 
 
-determineWinner : List ( SessionId, Player ) -> Maybe ( SessionId, Player )
+determineWinner : List ( ClientId, PlayerFE ) -> Maybe ( ClientId, PlayerFE )
 determineWinner players =
-    let
-        ( _, listPlayers ) =
-            List.unzip players
+    case players of
+        ( _, ( _, _, userChoice1 ) ) :: ( _, ( _, _, userChoice2 ) ) :: _ ->
+            let
+                isSameChoice =
+                    choiceToString userChoice1 == choiceToString userChoice2
 
-        ( _, listChoices ) =
-            List.unzip listPlayers
+                winnerFirst =
+                    List.sortWith
+                        (\( _, ( _, _, choiceA ) ) ( _, ( _, _, choiceB ) ) ->
+                            compareChoices ( choiceA, choiceB )
+                        )
+                        players
+            in
+            case winnerFirst of
+                winner :: _ ->
+                    if isSameChoice then
+                        Nothing
 
-        isSameChoice =
-            checkIfSameChoice listChoices choiceToString
+                    else
+                        Just winner
 
-        sortedPlayers =
-            List.sortWith
-                (\( _, ( _, choiceA ) ) ( _, ( _, choiceB ) ) ->
-                    compareChoices ( choiceA, choiceB )
-                )
-                players
-    in
-    case sortedPlayers of
-        winner :: _ ->
-            if isSameChoice then
-                Nothing
-
-            else
-                Just winner
+                _ ->
+                    Nothing
 
         _ ->
             Nothing
-
-
-checkIfSameChoice : List UserChoices -> (UserChoices -> String) -> Bool
-checkIfSameChoice list toString =
-    case list of
-        firstChoice :: secondChoice :: _ ->
-            toString firstChoice == toString secondChoice
-
-        _ ->
-            False
 
 
 choiceToString : UserChoices -> String
@@ -165,17 +155,17 @@ compareChoices tup =
             EQ
 
 
-getRandomSignAndName : Int -> ( PlayerName, UserChoices )
+getRandomSignAndName : Int -> UserChoices
 getRandomSignAndName num =
     case num of
         1 ->
-            ( "Bot22223127", Scissors )
+            Scissors
 
         2 ->
-            ( "Bot898dysag", Rock )
+            Rock
 
         3 ->
-            ( "Bot113ds433", Paper )
+            Paper
 
         _ ->
-            ( "Bot90090y3bf", Paper )
+            Paper
