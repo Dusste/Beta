@@ -23,7 +23,7 @@ app =
 
 init : ( Model, Cmd BackendMsg )
 init =
-    ( { playersStructure = Dict.empty, roomId = 1, playersQueue = [] }
+    ( { playersStructure = Dict.empty, roomId = 1, playersQueue = [], colorMode = Blue }
     , Cmd.none
     )
 
@@ -65,10 +65,15 @@ update msg model =
         CheckRoomPlayers _ clientId ->
             -- Don't allow user to join if there are already 2 players in room or none
             if List.length model.playersQueue == 1 then
-                ( model, Cmd.none )
+                ( model, sendToFrontend clientId <| InitialFeData model.colorMode )
 
             else
-                ( model, sendToFrontend clientId ResetOrOverGame )
+                ( model
+                , Cmd.batch
+                    [ sendToFrontend clientId ResetOrOverGame
+                    , sendToFrontend clientId <| InitialFeData model.colorMode
+                    ]
+                )
 
         InterruptGame _ clientId ->
             let
@@ -223,33 +228,27 @@ updateFromFrontend _ clientId msg model =
                 ]
             )
 
-        SignalPlayAgain roomId ->
+        SignalPlayAgain roomId gameResult ->
             let
                 { player1, player2 } =
                     model.playersStructure
                         |> Dict.get roomId
                         |> Maybe.withDefault defaultPlayersUnit
-
-                fromPlayerBEtoPlayerFE : List PlayerBE -> Dict ClientId PlayerFE
-                fromPlayerBEtoPlayerFE listPlayers =
-                    listPlayers
-                        |> List.foldl
-                            (\{ id, playerName, userChoice } sum ->
-                                Dict.insert id ( roomId, playerName, userChoice ) sum
-                            )
-                            Dict.empty
             in
             ( model
             , Cmd.batch
-                [ sendToFrontend player1.id <| BroadcastPlayAgain (fromPlayerBEtoPlayerFE [ player1, player2 ])
-                , sendToFrontend player2.id <| BroadcastPlayAgain (fromPlayerBEtoPlayerFE [ player1, player2 ])
+                [ sendToFrontend player1.id <| BroadcastPlayAgain gameResult
+                , sendToFrontend player2.id <| BroadcastPlayAgain gameResult
                 ]
             )
+
+        StoreColorMode colorMode ->
+            ( { model | colorMode = colorMode }, Cmd.none )
 
 
 subscriptions : BackendModel -> Sub BackendMsg
 subscriptions model =
     Sub.batch
-        [ onConnect CheckRoomPlayers -- ovo ces iskoristiti da proveris u slucaju invited plpayera da li si ti drugi igrac
+        [ onConnect CheckRoomPlayers
         , onDisconnect InterruptGame
         ]

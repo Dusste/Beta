@@ -1,22 +1,27 @@
 module Frontend exposing (..)
 
+import Ant.Icon
+import Ant.Icons as Icons
 import Browser exposing (UrlRequest(..))
+import Browser.Dom
+import Browser.Events
 import Browser.Navigation as Nav
 import Dict
 import Element exposing (..)
 import Element.Background as Background
 import Element.Border as Border
+import Element.Events as Event
 import Element.Font as Font exposing (center)
 import Element.Input as Input
 import Helper exposing (..)
 import Lamdera exposing (sendToBackend)
 import Process
 import Random
-import Tailwind.Utilities exposing (border)
 import Task
 import Time
 import Types exposing (..)
-import Url exposing (Url)
+import Url
+import Util exposing (..)
 
 
 type alias Model =
@@ -34,10 +39,10 @@ app =
             \m ->
                 case m.gameStatus of
                     NotChoosen ->
-                        Time.every 1000 Tick
+                        Sub.batch [ Time.every 1000 Tick, Browser.Events.onResize (\w _ -> GotNewWidth w) ]
 
                     _ ->
-                        Sub.none
+                        Browser.Events.onResize (\w _ -> GotNewWidth w)
         , view = view
         }
 
@@ -50,11 +55,16 @@ initialModel key =
     , gameStatus = OpponentStep
     , startingCounterNumber = 5
     , players = Dict.empty
-    , opponent = Machine Nothing
+    , opponent = Machine
     , randomInt = 1
     , route = Home
     , urlParamRandomNumber = 1
     , standings = Dict.empty
+    , device = DeviceDesktop
+    , language = Eng
+    , openLanguageDropdown = False
+    , openColorDropdown = False
+    , colorMode = Blue
     }
 
 
@@ -73,7 +83,7 @@ init url key =
                 , opponent = Man
                 , urlParamRandomNumber = roomId
               }
-            , Cmd.none
+            , Browser.Dom.getViewport |> Task.attempt (\x -> CheckDevice x)
             )
 
         Home ->
@@ -81,6 +91,7 @@ init url key =
             , Cmd.batch
                 [ Random.generate TakeRandom (Random.int 1 3)
                 , Random.generate TakeRandomBigger (Random.int 911 1099)
+                , Browser.Dom.getViewport |> Task.attempt (\x -> CheckDevice x)
                 ]
             )
 
@@ -88,7 +99,7 @@ init url key =
             ( { initM | gameStatus = FourOFour }, Cmd.none )
 
         _ ->
-            ( initM, Cmd.none )
+            ( initM, Browser.Dom.getViewport |> Task.attempt (\x -> CheckDevice x) )
 
 
 update : FrontendMsg -> Model -> ( Model, Cmd FrontendMsg )
@@ -124,26 +135,36 @@ update msg model =
                     ( { model | gameStatus = OpponentStep }, Cmd.none )
 
                 GameOver ->
-                    let
-                        ( roomId, _, _ ) =
-                            -- Both players are in same room
-                            model.players
-                                |> Dict.toList
-                                |> List.head
-                                |> Maybe.withDefault ( defaultClientId, defaultPlayerFE )
-                                |> Tuple.second
-                    in
                     ( { model
-                        | gameStatus = OpponentStep
+                        | userName = ""
+                        , route = Home
+                        , gameStatus = OpponentStep
                         , startingCounterNumber = 5
                         , players = Dict.empty
                         , standings = Dict.empty
                       }
-                    , sendToBackend <| GameOverToBE roomId
+                    , case model.opponent of
+                        Man ->
+                            let
+                                ( roomId, _, _ ) =
+                                    -- Both players are in same room
+                                    model.players
+                                        |> Dict.toList
+                                        |> List.head
+                                        |> Maybe.withDefault ( defaultClientId, defaultPlayerFE )
+                                        |> Tuple.second
+                            in
+                            Cmd.batch [ sendToBackend <| GameOverToBE roomId, Nav.reload ]
+
+                        Machine ->
+                            Nav.reload
                     )
 
                 _ ->
                     ( model, Cmd.none )
+
+        GotNewWidth width ->
+            ( { model | device = fromWidthToDevice width }, Cmd.none )
 
         Tick _ ->
             let
@@ -172,7 +193,7 @@ update msg model =
                     else
                         ( { model | startingCounterNumber = model.startingCounterNumber - 1 }, Cmd.none )
 
-                Machine _ ->
+                Machine ->
                     if counterDone then
                         let
                             updatedPlayers =
@@ -230,7 +251,7 @@ update msg model =
                             ]
                     )
 
-                Machine _ ->
+                Machine ->
                     let
                         robotChoice =
                             getRandomSignAndName model.randomInt
@@ -266,8 +287,25 @@ update msg model =
         TakeRandomBigger num ->
             ( { model | urlParamRandomNumber = num }, Cmd.none )
 
-        PlayAgainMan oldModel ->
+        PlayAgainMan oldModel gameResults ->
             let
+                gameResultSum =
+                    Dict.merge
+                        Dict.insert
+                        (\clientId oldStats newStats acc ->
+                            Dict.insert clientId
+                                { user = oldStats.user
+                                , win = oldStats.win + newStats.win
+                                , lose = oldStats.lose + newStats.lose
+                                , tie = oldStats.tie + newStats.tie
+                                }
+                                acc
+                        )
+                        Dict.insert
+                        model.standings
+                        gameResults
+                        Dict.empty
+
                 ( roomId, _, _ ) =
                     -- Both players are in same room
                     model.players
@@ -276,7 +314,23 @@ update msg model =
                         |> Maybe.withDefault ( defaultClientId, defaultPlayerFE )
                         |> Tuple.second
             in
-            ( { oldModel | gameStatus = NotChoosen }, sendToBackend <| SignalPlayAgain roomId )
+            ( { oldModel | gameStatus = NotChoosen, standings = gameResultSum }, sendToBackend <| SignalPlayAgain roomId gameResultSum )
+
+        CheckDevice (Ok { scene }) ->
+            let
+                { width } =
+                    scene
+            in
+            ( { model | device = fromWidthToDevice (round width) }, Cmd.none )
+
+        CheckDevice (Err _) ->
+            ( model, Cmd.none )
+
+        ChooseLanguage lang ->
+            ( { model | language = lang, openLanguageDropdown = not <| model.openLanguageDropdown }, Cmd.none )
+
+        ChooseDarkMode colorMode ->
+            ( { model | colorMode = colorMode, openColorDropdown = not <| model.openColorDropdown }, sendToBackend <| StoreColorMode colorMode )
 
         PlayAgainMachine oldModel gameResults ->
             let
@@ -299,10 +353,19 @@ update msg model =
             in
             ( { oldModel | gameStatus = NotChoosen, startingCounterNumber = 5, standings = gameResultSum }, Random.generate TakeRandom (Random.int 1 3) )
 
+        OpenLanguageDropdown ->
+            ( { model | openLanguageDropdown = not <| model.openLanguageDropdown }, Cmd.none )
+
+        OpenColorDropdown ->
+            ( { model | openColorDropdown = not <| model.openColorDropdown }, Cmd.none )
+
 
 updateFromBackend : ToFrontend -> Model -> ( Model, Cmd FrontendMsg )
 updateFromBackend msg model =
     case msg of
+        InitialFeData colorMode ->
+            ( { model | colorMode = colorMode }, Cmd.none )
+
         UserBecamePlayer player isInvited ->
             let
                 players =
@@ -328,8 +391,8 @@ updateFromBackend msg model =
                 Cmd.none
             )
 
-        BroadcastPlayAgain players ->
-            ( { model | players = players, gameStatus = NotChoosen, startingCounterNumber = 5 }, Cmd.none )
+        BroadcastPlayAgain gameResult ->
+            ( { model | gameStatus = NotChoosen, startingCounterNumber = 5, standings = gameResult }, Cmd.none )
 
         SendCurrentPlayer players ->
             ( { model | players = players, gameStatus = InvitedPlayerGamePending }, Cmd.none )
@@ -356,20 +419,109 @@ updateFromBackend msg model =
                 , gameStatus = OpponentStep
                 , startingCounterNumber = 5
                 , players = Dict.empty
-                , opponent = Machine Nothing
+                , opponent = Machine
                 , route = Home
               }
             , Nav.pushUrl model.key "/"
             )
 
 
+viewColorMode : FrontendModel -> Translation -> ColorSet -> Element FrontendMsg
+viewColorMode model translation colorScheme =
+    Element.column
+        [ padding 10, Font.size <| Basics.round (scaled 1), alignRight ]
+        [ Input.button
+            [ padding 4
+            , spacing 0
+            , centerX
+            , if model.openColorDropdown then
+                Background.color <| colorScheme.buttonSecondaryHover
+
+              else
+                Background.color <| colorScheme.buttonSecondary
+            , Border.rounded 3
+            , mouseOver <| [ Background.color <| colorScheme.buttonSecondaryHover ]
+            ]
+            { label =
+                Element.paragraph []
+                    [ text <| translation.pickColorScheme ++ " "
+                    , Icons.downOutlined
+                        [ Ant.Icon.width
+                            12
+                        , Ant.Icon.height 12
+                        ]
+                    ]
+            , onPress = Just <| OpenColorDropdown
+            }
+        , if model.openColorDropdown then
+            Element.column [ width fill, Background.color <| rgba255 25 105 162 0.3, spacingXY 0 4, Border.rounded 3, pointer ]
+                [ Element.paragraph [ paddingXY 5 3, mouseOver <| [ Background.color <| colorScheme.buttonSecondaryHover ], Event.onClick <| ChooseDarkMode Light ]
+                    [ text translation.light ]
+                , Element.paragraph [ paddingXY 5 3, mouseOver <| [ Background.color <| colorScheme.buttonSecondaryHover ], Event.onClick <| ChooseDarkMode Dark ]
+                    [ text translation.dark ]
+                , Element.paragraph [ paddingXY 5 3, mouseOver <| [ Background.color <| colorScheme.buttonSecondaryHover ], Event.onClick <| ChooseDarkMode Blue ]
+                    [ text translation.blue ]
+                ]
+
+          else
+            text ""
+        ]
+
+
+viewLanguage : FrontendModel -> Translation -> ColorSet -> Element FrontendMsg
+viewLanguage model translation colorScheme =
+    Element.column
+        [ padding 10, Font.size <| Basics.round (scaled 1) ]
+        [ Input.button
+            [ padding 4
+            , spacing 0
+            , centerX
+            , if model.openLanguageDropdown then
+                Background.color <| colorScheme.buttonSecondaryHover
+
+              else
+                Background.color <| colorScheme.buttonSecondary
+            , Border.rounded 3
+            , mouseOver <| [ Background.color <| colorScheme.buttonSecondaryHover ]
+            ]
+            { label =
+                Element.paragraph []
+                    [ text <| translation.pickLanguage ++ " "
+                    , Icons.downOutlined
+                        [ Ant.Icon.width
+                            12
+                        , Ant.Icon.height 12
+                        ]
+                    ]
+            , onPress = Just <| OpenLanguageDropdown
+            }
+        , if model.openLanguageDropdown then
+            Element.column [ width fill, Background.color <| rgba255 25 105 162 0.3, spacingXY 0 4, Border.rounded 3, pointer ]
+                [ Element.paragraph [ paddingXY 5 3, mouseOver <| [ Background.color <| colorScheme.buttonSecondaryHover ], Event.onClick <| ChooseLanguage Eng ] [ text translation.english ]
+                , Element.paragraph [ paddingXY 5 3, mouseOver <| [ Background.color <| colorScheme.buttonSecondaryHover ], Event.onClick <| ChooseLanguage Srb ] [ text translation.serbian ]
+                ]
+
+          else
+            text ""
+        ]
+
+
 view : Model -> Browser.Document FrontendMsg
 view model =
     { title = ""
     , body =
-        [ Element.layout [ Background.color <| rgb255 1 150 324, Font.color <| rgb255 255 255 255, paddingXY 0 180 ] <|
+        [ let
+            translation =
+                getTranslation model.language translations
+
+            colorScheme =
+                getColorMode model.colorMode colors
+          in
+          Element.layout [ Element.inFront <| viewLanguage model translation colorScheme, Element.inFront <| viewColorMode model translation colorScheme, Background.color <| colorScheme.background, Font.color <| colorScheme.font, paddingXY 0 180 ] <|
             Element.column [ centerX ]
-                [ Element.wrappedRow [] [ Element.paragraph [ Font.size <| Basics.round (scaled 4), paddingEach { top = 0, right = 0, left = 20, bottom = 30 } ] [ text "Dobrodošao u igru - Kamen Papir Makaze" ] ]
+                [ Element.wrappedRow []
+                    [ Element.paragraph [ Font.size <| Basics.round (scaled 4), paddingEach { top = 0, right = 0, left = 20, bottom = 30 } ] [ text translation.heading ]
+                    ]
                 , Element.column [ width fill, spacing 50, paddingXY 0 20, center, Background.color <| rgba255 25 105 162 0.3, Border.rounded 3 ]
                     [ case model.gameStatus of
                         OpponentStep ->
@@ -385,11 +537,11 @@ view model =
                                             , Font.size <| Basics.round (scaled 4)
                                             ]
                                             { onChange = ChooseOpponent
-                                            , label = Input.labelAbove [ Font.size <| Basics.round (scaled 4), center, Element.paddingXY 0 20 ] (text "Igram protiv")
+                                            , label = Input.labelAbove [ Font.size <| Basics.round (scaled 4), center, Element.paddingXY 0 20 ] (text translation.playingAgainst)
                                             , selected = Just model.opponent
                                             , options =
-                                                [ Input.optionWith Man (radioOption (Element.text "Čoveka"))
-                                                , Input.optionWith (Machine Nothing) (radioOption (Element.text "Mašine"))
+                                                [ Input.optionWith Man (radioOption (Element.text translation.opponentMan) colorScheme)
+                                                , Input.optionWith Machine (radioOption (Element.text translation.opponentMachine) colorScheme)
                                                 ]
                                             }
                                         ]
@@ -398,11 +550,11 @@ view model =
                                     [ padding 10
                                     , spacing 0
                                     , centerX
-                                    , Background.color <| rgb255 17 75 123
+                                    , Background.color <| colorScheme.buttonPrimary
                                     , Border.rounded 3
-                                    , mouseOver <| [ Background.color <| rgb255 17 60 110 ]
+                                    , mouseOver <| [ Background.color <| colorScheme.buttonPrimaryHover ]
                                     ]
-                                    { label = Element.text "Pošalji"
+                                    { label = Element.text translation.start
                                     , onPress = Just <| SendOpponent model.opponent
                                     }
                                 ]
@@ -414,14 +566,14 @@ view model =
                                 ]
                                 [ Element.paragraph
                                     [ Font.size <| Basics.round (scaled 4) ]
-                                    [ text <| "Pozvao te je drugar da odigrate igru" ]
+                                    [ text <| translation.friendInvited ]
                                 , Input.text
                                     [ padding 10
                                     , spacing 30
                                     , Font.color <| rgb255 92 99 118
                                     ]
                                     { onChange = \a -> StoreName a
-                                    , label = Input.labelAbove [ Font.size <| Basics.round (scaled 4), paddingXY 0 12 ] (text "Upiši svoje ime")
+                                    , label = Input.labelAbove [ Font.size <| Basics.round (scaled 4), paddingXY 0 12 ] (text translation.addYourName)
                                     , text = model.userName
                                     , placeholder = Nothing
                                     }
@@ -429,11 +581,11 @@ view model =
                                     [ padding 10
                                     , spacing 0
                                     , centerX
-                                    , Background.color <| rgb255 17 75 123
+                                    , Background.color <| colorScheme.buttonPrimary
                                     , Border.rounded 3
-                                    , mouseOver <| [ Background.color <| rgb255 17 60 110 ]
+                                    , mouseOver <| [ Background.color <| colorScheme.buttonPrimaryHover ]
                                     ]
-                                    { label = Element.text "Pošalji"
+                                    { label = Element.text translation.send
                                     , onPress = Just <| SendUserName model.userName
                                     }
                                 ]
@@ -441,8 +593,8 @@ view model =
                         InvitedPlayerGamePending ->
                             Element.column [ centerX, width <| fillPortion 500, center, spacing 50, Font.size <| Basics.round (scaled 4) ]
                                 [ Element.paragraph []
-                                    [ text "Zdravo "
-                                    , Element.el [ Font.color <| rgb255 255 255 1 ] (text model.userName)
+                                    [ text <| translation.hello ++ " "
+                                    , Element.el [ Font.color <| colorScheme.specialFont ] (text model.userName)
                                     ]
                                 , Element.paragraph []
                                     (model.players
@@ -453,13 +605,13 @@ view model =
                                             )
                                         |> List.map
                                             (\( _, ( _, name, _ ) ) ->
-                                                Element.el [ center, Font.color <| rgb255 255 255 1 ] (text name)
+                                                Element.el [ center, Font.color <| colorScheme.specialFont ] (text name)
                                             )
                                     )
                                 , Element.paragraph [ center ]
                                     [ text <|
                                         if Dict.size model.players == 2 then
-                                            "će igrati protiv tebe"
+                                            translation.willPlayAgainsYou
 
                                         else
                                             ""
@@ -477,7 +629,7 @@ view model =
                                     , Font.color <| rgb255 92 99 118
                                     ]
                                     { onChange = \a -> StoreName a
-                                    , label = Input.labelAbove [ Font.size <| Basics.round (scaled 4), paddingXY 0 12 ] (text "Upiši svoje ime")
+                                    , label = Input.labelAbove [ Font.size <| Basics.round (scaled 4), paddingXY 0 12 ] (text translation.addYourName)
                                     , text = model.userName
                                     , placeholder = Nothing
                                     }
@@ -485,11 +637,11 @@ view model =
                                     [ padding 10
                                     , spacing 0
                                     , centerX
-                                    , Background.color <| rgb255 17 75 123
+                                    , Background.color <| colorScheme.buttonPrimary
                                     , Border.rounded 3
-                                    , mouseOver <| [ Background.color <| rgb255 17 60 110 ]
+                                    , mouseOver <| [ Background.color <| colorScheme.buttonPrimaryHover ]
                                     ]
-                                    { label = Element.text "Pošalji"
+                                    { label = Element.text translation.send
                                     , onPress = Just <| SendUserName model.userName
                                     }
                                 ]
@@ -497,11 +649,11 @@ view model =
                         GamePending ->
                             Element.column [ centerX, width <| fillPortion 500, center, spacing 50, Font.size <| Basics.round (scaled 4) ]
                                 [ Element.paragraph []
-                                    [ text "Zdravo "
-                                    , Element.el [ Font.color <| rgb255 255 255 1 ] (text model.userName)
+                                    [ text <| translation.hello ++ " "
+                                    , Element.el [ Font.color <| colorScheme.specialFont ] (text model.userName)
                                     , Element.paragraph []
                                         [ if model.opponent == Man then
-                                            Element.el [ Font.color <| rgb255 255 255 255 ] (text ",kopiraj link i pošalji drugaru sa kojim želiš da igraš i sačekaj da dodje")
+                                            Element.el [ Font.color <| colorScheme.font ] (text translation.copyLinkAndSend)
 
                                           else
                                             text ""
@@ -516,13 +668,13 @@ view model =
                                             )
                                         |> List.map
                                             (\( _, ( _, name, _ ) ) ->
-                                                Element.el [ center, Font.color <| rgb255 255 255 1 ] (text name)
+                                                Element.el [ center, Font.color <| colorScheme.specialFont ] (text name)
                                             )
                                     )
                                 , Element.paragraph [ center ]
                                     [ text <|
                                         if Dict.size model.players == 2 then
-                                            "će igrati protiv tebe"
+                                            translation.willPlayAgainsYou
 
                                         else
                                             ""
@@ -539,40 +691,40 @@ view model =
                                         , width Element.fill
                                         ]
                                         { onChange = ChooseSign
-                                        , label = Input.labelAbove [ Font.size <| Basics.round (scaled 4), center ] (text "izaberi svoj znak:")
+                                        , label = Input.labelAbove [ Font.size <| Basics.round (scaled 3), center ] (text translation.pickYourSign)
                                         , selected = Just model.userChoices
                                         , options =
-                                            [ Input.optionWith Rock (radioOption (Element.text "Kamen"))
-                                            , Input.optionWith Scissors (radioOption (Element.text "Makaze"))
-                                            , Input.optionWith Paper (radioOption (Element.text "Papir"))
+                                            [ Input.optionWith Rock (radioOption (Element.text translation.rock) colorScheme)
+                                            , Input.optionWith Scissors (radioOption (Element.text translation.scissors) colorScheme)
+                                            , Input.optionWith Paper (radioOption (Element.text translation.paper) colorScheme)
                                             ]
                                         }
                                     ]
-                                , Element.paragraph [ center ] [ text <| "Imate još: " ++ String.fromInt model.startingCounterNumber ++ " sekundi" ]
+                                , Element.paragraph [ center ] [ text <| "(" ++ translation.timeLeft ++ ": " ++ String.fromInt model.startingCounterNumber ++ ")" ]
                                 ]
 
                         FourOFour ->
                             Element.column [ centerX, Font.size <| Basics.round (scaled 3), spacing 20, center ]
                                 [ Element.paragraph [ center ]
-                                    [ text "Izgleda da si se izgubio :( Nema ništa na ovoj strani" ]
+                                    [ text translation.fourOfourText ]
                                 , link
                                     [ padding 10
                                     , spacing 0
                                     , centerX
-                                    , Background.color <| rgb255 17 75 123
+                                    , Background.color <| colorScheme.buttonPrimary
                                     , Border.rounded 3
                                     , Font.size <| Basics.round (scaled 3)
-                                    , mouseOver <| [ Background.color <| rgb255 17 60 110 ]
+                                    , mouseOver <| [ Background.color <| colorScheme.buttonPrimaryHover ]
                                     ]
                                     { url = "/"
-                                    , label = Element.text "Vrati se na početak"
+                                    , label = Element.text translation.backToBeginning
                                     }
                                 ]
 
                         TimerDone ->
                             Element.column [ centerX, Font.size <| Basics.round (scaled 3), spacing 20, center ]
                                 [ Element.paragraph [ center ]
-                                    [ text "Imaćemo pobednika uskoro ..."
+                                    [ text translation.winnerAnnounceSoon
                                     ]
                                 ]
 
@@ -583,7 +735,7 @@ view model =
                                         |> Dict.toList
                                         |> List.map
                                             (\( _, ( _, name, choice ) ) ->
-                                                Element.paragraph [ padding 10 ] [ text <| "Učesnik " ++ name ++ " je izabrao " ++ choiceToString choice ]
+                                                Element.paragraph [ padding 10 ] [ text <| translation.participant ++ " " ++ name ++ " " ++ translation.havePicked ++ " " ++ choiceToString translation choice ]
                                             )
                                     )
                                 , Element.paragraph []
@@ -600,24 +752,13 @@ view model =
 viewWinner : FrontendModel -> Element FrontendMsg
 viewWinner model =
     let
-        -- Dict.fromList [ ( "123456789", { lose = 1, tie = 0, user = "Bot", win = 0 } ), ( "987654321", { lose = 0, tie = 0, user = "dsa", win = 1 } ) ]
         calcPoints : Int -> Int -> String
         calcPoints win tie =
-            let
-                point =
-                    if win > 0 then
-                        win + 1
-
-                    else if tie == 1 then
-                        tie
-
-                    else
-                        win
-            in
-            point |> String.fromInt
+            (win * 2) + (tie * 1) |> String.fromInt
 
         winnerDict =
-            case determineWinner <| Dict.toList model.players of
+            -- Dict.fromList [ ( "123456789", { lose = 5, tie = 3, user = "Bot", win = 2 } ), ( "987654321", { lose = 0, tie = 5, user = "dsa", win = 7 } ) ]
+            case determineWinner (Dict.toList model.players) translation of
                 Just ( _, ( _, winnerName, _ ) ) ->
                     let
                         updatedStandings =
@@ -625,10 +766,10 @@ viewWinner model =
                                 |> Dict.foldl
                                     (\currClientId ( _, playerName, _ ) sum ->
                                         if winnerName == playerName then
-                                            Dict.insert currClientId { user = playerName, win = 1, lose = 0, tie = 0 } sum
+                                            Dict.insert currClientId { defaultGameResult | user = playerName, win = 1 } sum
 
                                         else
-                                            Dict.insert currClientId { user = playerName, win = 0, lose = 1, tie = 0 } sum
+                                            Dict.insert currClientId { defaultGameResult | user = playerName, lose = 1 } sum
                                     )
                                     Dict.empty
                     in
@@ -640,21 +781,56 @@ viewWinner model =
                             model.players
                                 |> Dict.foldl
                                     (\currClientId ( _, playerName, _ ) sum ->
-                                        Dict.insert currClientId { user = playerName, win = 0, lose = 0, tie = 1 } sum
+                                        Dict.insert currClientId { defaultGameResult | user = playerName, tie = 1 } sum
                                     )
                                     Dict.empty
                     in
                     updatedStandings
+
+        translation =
+            getTranslation model.language translations
+
+        colorScheme =
+            getColorMode model.colorMode colors
+
+        sortedListResults =
+            Dict.merge
+                Dict.insert
+                (\clientId oldStats newStats acc ->
+                    Dict.insert clientId
+                        { user = oldStats.user
+                        , win = oldStats.win + newStats.win
+                        , lose = oldStats.lose + newStats.lose
+                        , tie = oldStats.tie + newStats.tie
+                        }
+                        acc
+                )
+                Dict.insert
+                model.standings
+                winnerDict
+                Dict.empty
+                |> Dict.toList
+                |> List.map Tuple.second
+                |> List.sortBy .lose
     in
     Element.column [ width fill, centerX, paddingXY 0 30, Font.size <| Basics.round (scaled 4), spacing 30 ]
         [ Element.paragraph
             []
-            [ case determineWinner <| Dict.toList model.players of
+            [ case determineWinner (Dict.toList model.players) translation of
                 Just ( _, ( _, winnerName, winnerChoice ) ) ->
-                    text <| "Pobednik je " ++ winnerName ++ " sa izborom " ++ choiceToString winnerChoice ++ "! Čestitamo !"
+                    text <|
+                        translation.theWinnerIs
+                            ++ " "
+                            ++ winnerName
+                            ++ " "
+                            ++ translation.withChoice
+                            ++ " "
+                            ++ choiceToString translation winnerChoice
+                            ++ "! "
+                            ++ translation.congratulations
 
                 Nothing ->
-                    text "Nema pobednika, izabrali ste isti znak"
+                    text translation.tieResult
             ]
 
         -- @TODO reset game should be approved by second participant
@@ -675,86 +851,116 @@ viewWinner model =
                 [ padding 10
                 , spacing 0
                 , centerX
-                , Background.color <| rgb255 17 75 123
+                , Background.color <| colorScheme.buttonPrimary
                 , Border.rounded 3
                 , Font.size <| Basics.round (scaled 3)
-                , mouseOver <| [ Background.color <| rgb255 17 60 110 ]
+                , mouseOver <| [ Background.color <| colorScheme.buttonPrimaryHover ]
                 ]
                 { onPress =
                     if model.opponent == Man then
-                        Just <| PlayAgainMan model
+                        Just <| PlayAgainMan model winnerDict
 
                     else
                         Just <| PlayAgainMachine model winnerDict
-                , label = Element.text "Igraj ponovo"
+                , label = Element.text translation.playAgain
                 }
             , link
                 [ padding 10
                 , spacing 0
                 , centerX
-                , Background.color <| rgb255 17 75 123
+                , Background.color <| colorScheme.buttonPrimary
                 , Border.rounded 3
                 , Font.size <| Basics.round (scaled 3)
-                , mouseOver <| [ Background.color <| rgb255 17 60 110 ]
+                , mouseOver <| [ Background.color <| colorScheme.buttonPrimaryHover ]
                 ]
                 { url = "/over"
-                , label = Element.text "Izadji iz igre"
+                , label = Element.text translation.exitGame
                 }
             ]
+
+        --  [ "Ime", "Pobeda", "Poraz", "Nerešeno", "Poeni" ]
+        --                 |> List.map
+        --                     (\s ->
+        --                         Element.column [ width fill ] [ text <| s ]
+        --                     )
         , Element.wrappedRow [ width fill, centerX, Font.size <| Basics.round (scaled 3) ]
-            [ Element.table [ Border.width 1, Border.solid, Border.color <| rgb255 255 255 255, spacingXY 0 10, padding 10 ]
-                { data =
-                    Dict.merge
-                        Dict.insert
-                        (\clientId oldStats newStats acc ->
-                            Dict.insert clientId
-                                { user = oldStats.user
-                                , win = oldStats.win + newStats.win
-                                , lose = oldStats.lose + newStats.lose
-                                , tie = oldStats.tie + newStats.tie
-                                }
-                                acc
-                        )
-                        Dict.insert
-                        model.standings
-                        winnerDict
-                        Dict.empty
-                        |> Dict.toList
-                        |> List.map Tuple.second
-                        |> List.sortBy .lose
-                , columns =
-                    [ { header = Element.el [ Border.widthEach { bottom = 1, left = 0, right = 0, top = 0 }, Border.solid, Border.color <| rgb255 255 255 255, paddingEach { bottom = 3, left = 0, right = 0, top = 0 } ] (text "Ime")
-                      , width = fill
-                      , view =
-                            \person ->
-                                Element.text person.user
-                      }
-                    , { header = Element.el [ Border.widthEach { bottom = 1, left = 0, right = 0, top = 0 }, Border.solid, Border.color <| rgb255 255 255 255, paddingEach { bottom = 3, left = 0, right = 0, top = 0 } ] (text "Pobeda")
-                      , width = fill
-                      , view =
-                            \person ->
-                                Element.text <| String.fromInt person.win
-                      }
-                    , { header = Element.el [ Border.widthEach { bottom = 1, left = 0, right = 0, top = 0 }, Border.solid, Border.color <| rgb255 255 255 255, paddingEach { bottom = 3, left = 0, right = 0, top = 0 } ] (text "Poraz")
-                      , width = fill
-                      , view =
-                            \person ->
-                                Element.text <| String.fromInt person.lose
-                      }
-                    , { header = Element.el [ Border.widthEach { bottom = 1, left = 0, right = 0, top = 0 }, Border.solid, Border.color <| rgb255 255 255 255, paddingEach { bottom = 3, left = 0, right = 0, top = 0 } ] (text "Nerešeno")
-                      , width = fill
-                      , view =
-                            \person ->
-                                Element.text <| String.fromInt person.tie
-                      }
-                    , { header = Element.el [ Border.widthEach { bottom = 1, left = 0, right = 0, top = 0 }, Border.solid, Border.color <| rgb255 255 255 255, paddingEach { bottom = 3, left = 0, right = 0, top = 0 } ] (text "Poeni")
-                      , width = fill
-                      , view =
-                            \person ->
-                                Element.text <|
-                                    calcPoints person.win person.tie
-                      }
-                    ]
-                }
+            [ case model.device of
+                DeviceMobile ->
+                    Element.column [ width fill ]
+                        [ Element.row [ width fill, paddingXY 20 10 ]
+                            (sortedListResults
+                                |> List.map
+                                    (\r ->
+                                        Element.column [ width fill ] [ text <| translation.name ++ ": " ++ r.user ]
+                                    )
+                            )
+                        , Element.row [ width fill, paddingXY 20 10 ]
+                            (sortedListResults
+                                |> List.map
+                                    (\r ->
+                                        Element.column [ width fill ] [ text <| translation.win ++ ": " ++ String.fromInt r.win ]
+                                    )
+                            )
+                        , Element.row [ width fill, paddingXY 20 10 ]
+                            (sortedListResults
+                                |> List.map
+                                    (\r ->
+                                        Element.column [ width fill ] [ text <| translation.lose ++ ": " ++ String.fromInt r.lose ]
+                                    )
+                            )
+                        , Element.row [ width fill, paddingXY 20 10 ]
+                            (sortedListResults
+                                |> List.map
+                                    (\r ->
+                                        Element.column [ width fill ] [ text <| translation.tie ++ ": " ++ String.fromInt r.tie ]
+                                    )
+                            )
+                        , Element.row [ width fill, paddingXY 20 10 ]
+                            (sortedListResults
+                                |> List.map
+                                    (\r ->
+                                        Element.column [ width fill ] [ text <| translation.points ++ ": " ++ calcPoints r.win r.tie ]
+                                    )
+                            )
+                        ]
+
+                _ ->
+                    Element.table [ Border.width 1, Border.solid, Border.color <| colorScheme.font, spacingXY 0 10, padding 10 ]
+                        { data =
+                            sortedListResults
+                        , columns =
+                            [ { header = Element.el [ width fill, Border.widthEach { bottom = 1, left = 0, right = 0, top = 0 }, Border.solid, Border.color <| colorScheme.font, paddingEach { bottom = 3, left = 0, right = 0, top = 0 } ] (text translation.name)
+                              , width = fill
+                              , view =
+                                    \person ->
+                                        Element.text person.user
+                              }
+                            , { header = Element.el [ Border.widthEach { bottom = 1, left = 0, right = 0, top = 0 }, Border.solid, Border.color <| colorScheme.font, paddingEach { bottom = 3, left = 0, right = 0, top = 0 } ] (text translation.win)
+                              , width = fill
+                              , view =
+                                    \person ->
+                                        Element.text <| String.fromInt person.win
+                              }
+                            , { header = Element.el [ Border.widthEach { bottom = 1, left = 0, right = 0, top = 0 }, Border.solid, Border.color <| colorScheme.font, paddingEach { bottom = 3, left = 0, right = 0, top = 0 } ] (text translation.lose)
+                              , width = fill
+                              , view =
+                                    \person ->
+                                        Element.text <| String.fromInt person.lose
+                              }
+                            , { header = Element.el [ Border.widthEach { bottom = 1, left = 0, right = 0, top = 0 }, Border.solid, Border.color <| colorScheme.font, paddingEach { bottom = 3, left = 0, right = 0, top = 0 } ] (text translation.tie)
+                              , width = fill
+                              , view =
+                                    \person ->
+                                        Element.text <| String.fromInt person.tie
+                              }
+                            , { header = Element.el [ Border.widthEach { bottom = 1, left = 0, right = 0, top = 0 }, Border.solid, Border.color <| colorScheme.font, paddingEach { bottom = 3, left = 0, right = 0, top = 0 } ] (text translation.points)
+                              , width = fill
+                              , view =
+                                    \person ->
+                                        Element.text <|
+                                            calcPoints person.win person.tie
+                              }
+                            ]
+                        }
             ]
         ]

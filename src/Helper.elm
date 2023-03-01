@@ -1,171 +1,235 @@
 module Helper exposing (..)
 
-import Element exposing (..)
-import Element.Border as Border
-import Element.Input as Input
-import Lamdera exposing (ClientId)
+import Dict exposing (Dict)
+import Element exposing (rgb255)
 import Types exposing (..)
-import Url exposing (Url)
-import Url.Parser as Parser exposing ((</>), Parser)
 
 
-parseUrl : Url -> Route
-parseUrl url =
-    case Parser.parse matchRoute url of
-        Just route ->
-            route
-
-        Nothing ->
-            NotFound
-
-
-roomIdParser : Parser (RoomParam -> a) a
-roomIdParser =
-    Parser.custom "ROOMPARAM" <|
-        \roomParam ->
-            Maybe.map RoomParam (String.toInt roomParam)
-
-
-matchRoute : Parser (Route -> a) a
-matchRoute =
-    Parser.oneOf
-        [ Parser.map Home Parser.top
-        , Parser.map Room (Parser.s "room" </> roomIdParser)
-        , Parser.map Reset (Parser.s "reset")
-        , Parser.map GameOver (Parser.s "over")
+translations : Dict String Translation
+translations =
+    Dict.fromList
+        [ ( "srb"
+          , { heading = "Dobrodošao u igru - Kamen Papir Makaze"
+            , playingAgainst = "Igram protiv"
+            , opponentMan = "Čoveka"
+            , opponentMachine = "Mašine"
+            , addYourName = "Upiši svoje ime"
+            , send = "Pošalji"
+            , hello = "Zdravo"
+            , friendInvited = "Pozvao te je drugar da odigrate igru"
+            , copyLinkAndSend = ",kopiraj link i pošalji drugaru sa kojim želiš da igraš i sačekaj da dodje"
+            , willPlayAgainsYou = "će igrati protiv tebe"
+            , fourOfourText = "Izgleda da si se izgubio :( Nema ništa na ovoj strani"
+            , pickYourSign = "izaberi svoj znak:"
+            , backToBeginning = "Vrati se na početak"
+            , timeLeft = "preostalo vreme u sekundama"
+            , winnerAnnounceSoon = "Imaćemo pobednika uskoro ..."
+            , rock = "Kamen"
+            , paper = "Papir"
+            , scissors = "Makaze"
+            , seconds = "sekundi"
+            , participant = "Učesnik"
+            , havePicked = "je izabrao "
+            , tieResult = "Nema pobednika, izabrali ste isti znak"
+            , playAgain = "Igraj ponovo"
+            , exitGame = "Izadji iz igre"
+            , name = "Ime"
+            , win = "Pobeda"
+            , lose = "Poraz"
+            , tie = "Nerešeno"
+            , points = "Poeni"
+            , theWinnerIs = "Pobednik je"
+            , withChoice = "sa izborom"
+            , congratulations = "Čestitamo !"
+            , pickLanguage = "Izaberi jezik"
+            , pickColorScheme = "Izaberi osnovne boje"
+            , english = "Engleski"
+            , serbian = "Srpski"
+            , start = "Započni !"
+            , light = "Svetla"
+            , dark = "Tamna"
+            , blue = "Plava"
+            }
+          )
+        , ( "eng"
+          , defaultTranslations
+          )
         ]
 
 
-invitedPlayerSecretNumber : Int
-invitedPlayerSecretNumber =
-    99999
-
-
-scaled : Int -> Float
-scaled =
-    Element.modular 16 1.25
-
-
-radioOption : Element msg -> Input.OptionState -> Element msg
-radioOption optionLabel status =
-    Element.wrappedRow
-        [ Element.spacing 10
-        , Element.width Element.shrink
-        ]
-        [ Element.el
-            [ Element.width (Element.px 20)
-            , Element.height (Element.px 20)
-            , Border.width <|
-                case status of
-                    Input.Idle ->
-                        2
-
-                    Input.Focused ->
-                        2
-
-                    Input.Selected ->
-                        10
-            , Border.color <|
-                case status of
-                    Input.Idle ->
-                        Element.rgb 1 1 1
-
-                    Input.Focused ->
-                        Element.rgb 1 1 1
-
-                    Input.Selected ->
-                        Element.rgb 1 1 1
-            ]
-            Element.none
-        , Element.el [ Element.width Element.fill ] optionLabel
+colors : Dict String ColorSet
+colors =
+    Dict.fromList
+        [ ( "light"
+          , { background = rgb255 255 255 255
+            , font = rgb255 0 0 0
+            , specialFont = rgb255 76 175 80
+            , buttonPrimary = rgb255 255 255 255
+            , buttonPrimaryHover = rgb255 242 242 242
+            , buttonSecondary = rgb255 255 255 255
+            , buttonSecondaryHover = rgb255 242 242 242
+            }
+          )
+        , ( "dark"
+          , { background = rgb255 0 0 0
+            , font = rgb255 255 255 255
+            , specialFont = rgb255 255 255 1
+            , buttonPrimary = rgb255 0 0 0
+            , buttonPrimaryHover = rgb255 17 60 110
+            , buttonSecondary = rgb255 0 0 0
+            , buttonSecondaryHover = rgb255 17 60 110
+            }
+          )
+        , ( "blue"
+          , defaultColorSet
+          )
         ]
 
 
-determineWinner : List ( ClientId, PlayerFE ) -> Maybe ( ClientId, PlayerFE )
-determineWinner players =
-    case players of
-        ( _, ( _, _, userChoice1 ) ) :: ( _, ( _, _, userChoice2 ) ) :: _ ->
-            let
-                isSameChoice =
-                    choiceToString userChoice1 == choiceToString userChoice2
-
-                winnerFirst =
-                    List.sortWith
-                        (\( _, ( _, _, choiceA ) ) ( _, ( _, _, choiceB ) ) ->
-                            compareChoices ( choiceA, choiceB )
-                        )
-                        players
-            in
-            case winnerFirst of
-                winner :: _ ->
-                    if isSameChoice then
-                        Nothing
-
-                    else
-                        Just winner
-
-                _ ->
-                    Nothing
-
-        _ ->
-            Nothing
+defaultColorSet : ColorSet
+defaultColorSet =
+    { background = rgb255 1 150 324
+    , font = rgb255 255 255 255
+    , specialFont = rgb255 255 255 1
+    , buttonPrimary = rgb255 17 75 123
+    , buttonPrimaryHover = rgb255 17 60 110
+    , buttonSecondary = rgb255 1 150 324
+    , buttonSecondaryHover = rgb255 17 60 110
+    }
 
 
-choiceToString : UserChoices -> String
-choiceToString choice =
-    case choice of
-        Scissors ->
-            "Makaze"
+defaultTranslations : Translation
+defaultTranslations =
+    { heading = "Welcome to the Rock, Paper, Scissors game"
+    , playingAgainst = "Play against"
+    , opponentMan = "Human"
+    , opponentMachine = "Robot"
+    , addYourName = "Write your name"
+    , send = "Send"
+    , hello = "Hello"
+    , friendInvited = "Your friend wants to play with you"
+    , copyLinkAndSend = ",copy the link and send it to friend you would like to play game with and wait for him/her"
+    , willPlayAgainsYou = "will play against you"
+    , fourOfourText = "You look puzzled :( Nothing on this page"
+    , pickYourSign = "choose your sign:"
+    , timeLeft = "time left in seconds"
+    , winnerAnnounceSoon = "Winner will be announced soon ..."
+    , backToBeginning = "Back to beginning"
+    , rock = "Rock"
+    , paper = "Paper"
+    , scissors = "Scissors"
+    , seconds = "second"
+    , participant = "Participant"
+    , havePicked = "has choosen"
+    , tieResult = "It's a tie, you've chosen same sign"
+    , playAgain = "Play again"
+    , exitGame = "Exit"
+    , name = "Name"
+    , win = "Win"
+    , lose = "Lose"
+    , tie = "Tie"
+    , points = "Points"
+    , theWinnerIs = "Winner is"
+    , withChoice = "with choice"
+    , congratulations = "Congratulations !"
+    , pickLanguage = "Language"
+    , pickColorScheme = "Pick color mode"
+    , english = "English"
+    , serbian = "Serbian"
+    , start = "Start !"
+    , light = "Light"
+    , dark = "Dark"
+    , blue = "Blue"
+    }
 
-        Rock ->
-            "Kamen"
 
-        Paper ->
-            "Papir"
+fromLanguageToString : Language -> String
+fromLanguageToString lang =
+    case lang of
+        Eng ->
+            "eng"
 
-
-compareChoices : ( UserChoices, UserChoices ) -> Order
-compareChoices tup =
-    case tup of
-        ( Scissors, Rock ) ->
-            GT
-
-        ( Rock, Paper ) ->
-            GT
-
-        ( Scissors, Paper ) ->
-            LT
-
-        ( Rock, Scissors ) ->
-            LT
-
-        ( Paper, Rock ) ->
-            LT
-
-        ( Paper, Scissors ) ->
-            GT
-
-        ( Scissors, Scissors ) ->
-            EQ
-
-        ( Rock, Rock ) ->
-            EQ
-
-        ( Paper, Paper ) ->
-            EQ
+        Srb ->
+            "srb"
 
 
-getRandomSignAndName : Int -> UserChoices
-getRandomSignAndName num =
-    case num of
-        1 ->
-            Scissors
+fromColorToString : ColorMode -> String
+fromColorToString color =
+    case color of
+        Dark ->
+            "dark"
 
-        2 ->
-            Rock
+        Light ->
+            "light"
 
-        3 ->
-            Paper
+        Blue ->
+            "blue"
 
-        _ ->
-            Paper
+
+type alias ColorSet =
+    { background : Element.Color
+    , font : Element.Color
+    , specialFont : Element.Color
+    , buttonPrimary : Element.Color
+    , buttonPrimaryHover : Element.Color
+    , buttonSecondary : Element.Color
+    , buttonSecondaryHover : Element.Color
+    }
+
+
+type alias Translation =
+    { heading : String
+    , playingAgainst : String
+    , opponentMan : String
+    , opponentMachine : String
+    , addYourName : String
+    , fourOfourText : String
+    , send : String
+    , hello : String
+    , winnerAnnounceSoon : String
+    , backToBeginning : String
+    , friendInvited : String
+    , copyLinkAndSend : String
+    , willPlayAgainsYou : String
+    , pickYourSign : String
+    , timeLeft : String
+    , rock : String
+    , paper : String
+    , scissors : String
+    , seconds : String
+    , participant : String
+    , havePicked : String
+    , tieResult : String
+    , playAgain : String
+    , exitGame : String
+    , name : String
+    , win : String
+    , lose : String
+    , tie : String
+    , points : String
+    , theWinnerIs : String
+    , withChoice : String
+    , congratulations : String
+    , pickLanguage : String
+    , english : String
+    , serbian : String
+    , start : String
+    , pickColorScheme : String
+    , light : String
+    , dark : String
+    , blue : String
+    }
+
+
+getTranslation : Language -> Dict String Translation -> Translation
+getTranslation language translationsDict =
+    translationsDict
+        |> Dict.get (fromLanguageToString language)
+        |> Maybe.withDefault defaultTranslations
+
+
+getColorMode : ColorMode -> Dict String ColorSet -> ColorSet
+getColorMode color colorsDict =
+    colorsDict
+        |> Dict.get (fromColorToString color)
+        |> Maybe.withDefault defaultColorSet

@@ -1,6 +1,7 @@
 module Types exposing (..)
 
 import Browser exposing (UrlRequest)
+import Browser.Dom
 import Browser.Navigation exposing (Key)
 import Dict exposing (Dict)
 import Lamdera exposing (ClientId, SessionId)
@@ -24,6 +25,7 @@ type alias BackendModel =
     { playersStructure : Dict RoomId RoomUnit
     , playersQueue : List ( ClientId, PlayerName )
     , roomId : Int
+    , colorMode : ColorMode
     }
 
 
@@ -39,6 +41,11 @@ type alias FrontendModel =
     , randomInt : Int
     , urlParamRandomNumber : Int
     , standings : Dict ClientId GameResult
+    , device : Devices
+    , language : Language
+    , openLanguageDropdown : Bool
+    , openColorDropdown : Bool
+    , colorMode : ColorMode
     }
 
 
@@ -75,7 +82,7 @@ type alias RoomId =
 
 type Opponent
     = Man
-    | Machine (Maybe GameResult)
+    | Machine
 
 
 type alias GameResult =
@@ -150,6 +157,24 @@ defaultClientId =
     "987654321"
 
 
+type Language
+    = Eng
+    | Srb
+
+
+type Devices
+    = DeviceMobile
+    | DeviceTablet
+    | DeviceSmallDesktop
+    | DeviceDesktop
+
+
+type ColorMode
+    = Dark
+    | Light
+    | Blue
+
+
 type FrontendMsg
     = UrlClicked UrlRequest
     | UrlChanged Url
@@ -162,17 +187,24 @@ type FrontendMsg
     | SendUserName String
     | StartGame
     | ChooseSign UserChoices
-    | PlayAgainMan FrontendModel
+    | PlayAgainMan FrontendModel (Dict ClientId GameResult)
     | PlayAgainMachine FrontendModel (Dict ClientId GameResult)
+    | GotNewWidth Int
+    | CheckDevice (Result String Browser.Dom.Viewport)
+    | ChooseLanguage Language
+    | OpenLanguageDropdown
+    | OpenColorDropdown
+    | ChooseDarkMode ColorMode
 
 
 type ToBackend
     = UserJoined PlayerName
     | TimeIsUp PlayerFE
     | ResetBeModel RoomId
-    | SignalPlayAgain RoomId
+    | SignalPlayAgain RoomId (Dict ClientId GameResult)
     | AnnounceResults RoomId
     | GameOverToBE RoomId
+    | StoreColorMode ColorMode
 
 
 type BackendMsg
@@ -187,6 +219,7 @@ type ToFrontend
     = UserBecamePlayer (Dict ClientId PlayerFE) Bool
     | ResetOrOverGame
     | SendCurrentPlayer (Dict ClientId PlayerFE)
-    | BroadcastPlayAgain (Dict ClientId PlayerFE)
+    | BroadcastPlayAgain (Dict ClientId GameResult)
     | SendFinalResults (Dict ClientId PlayerFE)
     | SignalEndToFE
+    | InitialFeData ColorMode
