@@ -63,21 +63,6 @@ type Opponent
     | Machine (Maybe GameResult)
 
 
-type alias FrontendModel =
-    { key : Browser.Navigation.Key
-    , route : Route
-    , userChoices : UserChoices
-    , userName : String
-    , gameStatus : GameStatus
-    , startingCounterNumber : Int
-    , players : Dict.Dict Lamdera.ClientId PlayerFE
-    , opponent : Opponent
-    , randomInt : Int
-    , urlParamRandomNumber : Int
-    , standings : Dict.Dict Lamdera.ClientId GameResult
-    }
-
-
 type alias PlayerBE =
     { id : Lamdera.ClientId
     , playerName : PlayerName
